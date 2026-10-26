@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"managify/internal/inventory"
-	"managify/internal/secrets"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
 )
 
 // fakePrompter answers every prompt with Answer and counts the calls by kind.

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"syscall"
 
-	"managify/internal/inventory"
+	"github.com/erfuun/managify/internal/inventory"
 )
 
 // AuthError means the server refused the credentials.

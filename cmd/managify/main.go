@@ -9,10 +9,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"managify/internal/appdir"
-	"managify/internal/inventory"
-	"managify/internal/secrets"
-	"managify/internal/tui"
+	"github.com/erfuun/managify/internal/appdir"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/tui"
 )
 
 func main() {

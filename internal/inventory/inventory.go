@@ -15,7 +15,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"managify/internal/appdir"
+	"github.com/erfuun/managify/internal/appdir"
 )
 
 type Auth string

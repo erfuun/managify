@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"managify/internal/inventory"
-	"managify/internal/secrets"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
 )
 
 // Creds finds passwords and passphrases: keychain, then this session's

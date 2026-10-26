@@ -12,7 +12,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"managify/internal/inventory"
+	"github.com/erfuun/managify/internal/inventory"
 )
 
 // Client is one live SSH connection.

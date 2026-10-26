@@ -16,7 +16,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"managify/internal/inventory"
+	"github.com/erfuun/managify/internal/inventory"
 )
 
 // HostKeyMismatchError means the server presented a different key than the

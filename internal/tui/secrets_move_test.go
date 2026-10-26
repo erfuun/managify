@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"managify/internal/inventory"
-	"managify/internal/secrets"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
 )
 
 // Changing where a secret lives without retyping it must move it, not drop it.

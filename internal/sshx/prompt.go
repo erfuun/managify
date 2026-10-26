@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	"managify/internal/inventory"
+	"github.com/erfuun/managify/internal/inventory"
 )
 
 type PromptKind int

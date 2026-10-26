@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"managify/internal/inventory"
+	"github.com/erfuun/managify/internal/inventory"
 )
 
 func recv(t *testing.T, q *Queue) *Pending {

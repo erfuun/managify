@@ -1,4 +1,4 @@
-module managify
+module github.com/erfuun/managify
 
 go 1.27
 

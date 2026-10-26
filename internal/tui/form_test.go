@@ -9,8 +9,8 @@ import (
 
 	"github.com/charmbracelet/x/exp/teatest"
 
-	"managify/internal/inventory"
-	"managify/internal/secrets"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
 )
 
 // waitForWithout waits until all subs appear, failing if forbidden ever shows up.

@@ -12,8 +12,8 @@ import (
 	"github.com/charmbracelet/x/exp/teatest"
 	"github.com/muesli/termenv"
 
-	"managify/internal/inventory"
-	"managify/internal/secrets"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
 )
 
 func TestMain(m *testing.M) {

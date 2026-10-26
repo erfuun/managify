@@ -16,9 +16,9 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"managify/internal/inventory"
-	"managify/internal/secrets"
-	"managify/internal/sshtest"
+	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/sshtest"
 )
 
 func noAgent() (agent.Agent, error) { return nil, errors.New("no agent") }

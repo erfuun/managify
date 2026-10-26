@@ -14,7 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 
-	"managify/internal/sshtest"
+	"github.com/erfuun/managify/internal/sshtest"
 )
 
 func hkServer(t *testing.T) *sshtest.Server {

@@ -10,8 +10,8 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"managify/internal/appdir"
-	"managify/internal/inventory"
+	"github.com/erfuun/managify/internal/appdir"
+	"github.com/erfuun/managify/internal/inventory"
 )
 
 // closingAgent lets Dial close the agent connection once the handshake is over.
