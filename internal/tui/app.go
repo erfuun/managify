@@ -23,6 +23,7 @@ type screen int
 
 const (
 	screenList screen = iota
+	screenForm
 )
 
 type Model struct {
@@ -32,8 +33,11 @@ type Model struct {
 	showHelp      bool
 	footer        string // one-line message under the list, e.g. an error
 
-	cursor   int
-	selected map[string]bool // server ID → selected
+	cursor        int
+	selected      map[string]bool // server ID → selected
+	confirmDelete string          // server ID awaiting y/n
+
+	form formModel
 }
 
 func New(d Deps) Model {
@@ -53,6 +57,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenList:
 		return m.updateList(msg)
+	case screenForm:
+		return m.updateForm(msg)
 	}
 	return m, nil
 }
@@ -64,6 +70,8 @@ func (m Model) View() string {
 	switch m.screen {
 	case screenList:
 		return m.viewList()
+	case screenForm:
+		return m.viewForm()
 	}
 	return ""
 }

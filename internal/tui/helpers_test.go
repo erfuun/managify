@@ -27,9 +27,23 @@ var (
 	dbServer  = inventory.Server{Name: "db-1", Host: "203.0.113.20", User: "admin", Auth: inventory.AuthPassword, SavePassword: true}
 )
 
+// invPaths remembers where each test inventory lives (the path is unexported).
+var invPaths = map[*inventory.Inventory]string{}
+
+func invPath(t *testing.T, d Deps) string {
+	t.Helper()
+	p, ok := invPaths[d.Inv]
+	if !ok {
+		t.Fatal("inventory not created by testDeps")
+	}
+	return p
+}
+
 func testDeps(t *testing.T, servers ...inventory.Server) Deps {
 	t.Helper()
-	inv, err := inventory.Load(filepath.Join(t.TempDir(), "servers.yaml"))
+	p := filepath.Join(t.TempDir(), "servers.yaml")
+	inv, err := inventory.Load(p)
+	invPaths[inv] = p
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,6 +97,15 @@ func press(tm *teatest.TestModel, keys ...string) {
 		}
 		tm.Send(m)
 	}
+}
+
+// keyBackspaces is a batch of n backspaces sent as one message sequence.
+func keyBackspaces(n int) tea.Msg {
+	cmds := make([]tea.Cmd, n)
+	for i := range cmds {
+		cmds[i] = func() tea.Msg { return tea.KeyMsg{Type: tea.KeyBackspace} }
+	}
+	return tea.Sequence(cmds...)()
 }
 
 // typeText sends s as runes, one message per call like a paste.

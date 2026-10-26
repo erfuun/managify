@@ -19,6 +19,13 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	n := len(m.d.Inv.Servers)
 	m.cursor = clamp(m.cursor, 0, max(n-1, 0))
+	if m.confirmDelete != "" {
+		if km.String() == "y" {
+			return m.deleteServer(m.confirmDelete)
+		}
+		m.confirmDelete = ""
+		return m, nil
+	}
 	if m.showHelp {
 		switch {
 		case key.Matches(km, keys.Quit):
@@ -40,6 +47,17 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case key.Matches(km, keys.Down):
 		if m.cursor < n-1 {
 			m.cursor++
+		}
+	case key.Matches(km, keys.Add):
+		return m.openForm(nil)
+	// Edit and delete act on the cursor row, never the whole selection.
+	case key.Matches(km, keys.Edit):
+		if s, ok := m.cursorServer(); ok {
+			return m.openForm(&s)
+		}
+	case key.Matches(km, keys.Delete):
+		if s, ok := m.cursorServer(); ok {
+			m.confirmDelete = s.ID
 		}
 	case key.Matches(km, keys.Select):
 		if s, ok := m.cursorServer(); ok {
@@ -87,7 +105,9 @@ func (m Model) viewList() string {
 	}
 
 	b.WriteString(rule)
-	if m.footer != "" {
+	if s, ok := m.d.Inv.Get(m.confirmDelete); ok {
+		b.WriteString(" " + errorStyle.Render(fmt.Sprintf("Delete %s? (y/n)", s.Name)) + "\n")
+	} else if m.footer != "" {
 		b.WriteString(" " + errorStyle.Render(m.footer) + "\n")
 	}
 	b.WriteString(" " + hintStyle.Render("space select · enter shell · r run · u upload · g download · s snippets") + "\n")
