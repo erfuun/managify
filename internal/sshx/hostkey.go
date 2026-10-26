@@ -2,12 +2,15 @@ package sshx
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 
 	"golang.org/x/crypto/ssh"
@@ -70,6 +73,59 @@ func HostKeyCallback(ctx context.Context, knownHostsPath string, s inventory.Ser
 		return err
 	}, nil
 }
+
+// KnownHostAlgorithms lists the host-key algorithms already remembered for
+// addr, so negotiation picks a key type known_hosts can verify instead of
+// reporting a "changed" key that is merely a different type. Unknown hosts
+// get nil, which keeps the defaults for first-use trust.
+func KnownHostAlgorithms(knownHostsPath, addr string) ([]string, error) {
+	check, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, err
+	}
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	port, _ := strconv.Atoi(portStr)
+	ip := net.ParseIP(host)
+	if ip == nil {
+		ip = net.IPv4zero
+	}
+	err = check(addr, &net.TCPAddr{IP: ip, Port: port}, probeKey)
+	var ke *knownhosts.KeyError
+	if !errors.As(err, &ke) {
+		return nil, nil
+	}
+	var algos []string
+	seen := map[string]bool{}
+	for _, w := range ke.Want {
+		types := []string{w.Key.Type()}
+		if w.Key.Type() == ssh.KeyAlgoRSA {
+			types = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+		}
+		for _, t := range types {
+			if !seen[t] {
+				seen[t] = true
+				algos = append(algos, t)
+			}
+		}
+	}
+	return algos, nil
+}
+
+// probeKey never matches a real entry; checking it reveals which keys are known.
+var probeKey = func() ssh.PublicKey {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	k, err := ssh.NewPublicKey(pub)
+	if err != nil {
+		panic(err)
+	}
+	return k
+}()
 
 func ensureFile(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

@@ -6,7 +6,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -30,13 +32,15 @@ type Options struct {
 	Exec          ExecFunc
 	Shell         bool // accept pty-req/shell; echo each line, exit 0 on "exit"
 	SFTP          bool // "sftp" subsystem backed by one in-memory filesystem
+	ECDSA         bool // also offer an ECDSA P-256 host key, like real servers offering several types
 }
 
 type Server struct {
-	Addr       string
-	Host       string
-	Port       int
-	HostSigner ssh.Signer
+	Addr        string
+	Host        string
+	Port        int
+	HostSigner  ssh.Signer
+	ECDSASigner ssh.Signer // nil unless Options.ECDSA
 
 	opts   Options
 	cfg    *ssh.ServerConfig
@@ -82,6 +86,15 @@ func Start(t testing.TB, o Options) *Server {
 		fs:         sftp.InMemHandler(),
 		live:       map[net.Conn]struct{}{},
 	}
+	if o.ECDSA {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.ECDSASigner, err = ssh.NewSignerFromKey(k); err != nil {
+			t.Fatal(err)
+		}
+	}
 	s.cfg = s.serverConfig()
 	go s.acceptLoop()
 	t.Cleanup(func() {
@@ -118,6 +131,9 @@ func (s *Server) serverConfig() *ssh.ServerConfig {
 		}
 	}
 	cfg.AddHostKey(s.HostSigner)
+	if s.ECDSASigner != nil {
+		cfg.AddHostKey(s.ECDSASigner)
+	}
 	return cfg
 }
 
@@ -290,5 +306,10 @@ func (s *Server) DropAll() {
 
 // KnownHostsLine is this server's known_hosts entry.
 func (s *Server) KnownHostsLine() string {
-	return knownhosts.Line([]string{knownhosts.Normalize(s.Addr)}, s.HostSigner.PublicKey())
+	return s.KnownHostsLineFor(s.HostSigner.PublicKey())
+}
+
+// KnownHostsLineFor is a known_hosts entry for this address with key k.
+func (s *Server) KnownHostsLineFor(k ssh.PublicKey) string {
+	return knownhosts.Line([]string{knownhosts.Normalize(s.Addr)}, k)
 }
