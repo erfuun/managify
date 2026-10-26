@@ -36,6 +36,10 @@ func (st *dialState) note(err error) {
 func (d *Dialer) authMethods(ctx context.Context, s inventory.Server, pc *pausableConn, st *dialState) []ssh.AuthMethod {
 	if s.Auth == inventory.AuthPassword {
 		password := func() (string, error) {
+			// A cancelled prompt ends the dial; keyboard-interactive must not ask again.
+			if errors.Is(st.err, ErrPromptCancelled) {
+				return "", st.err
+			}
 			// Paused around the whole lookup: it may wait on another dial's prompt.
 			pc.pause()
 			defer pc.resume()

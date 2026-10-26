@@ -158,6 +158,16 @@ func TestDialPromptCancelledIsNotAuthError(t *testing.T) {
 	}
 }
 
+// After a cancel, keyboard-interactive must not ask the same question again.
+func TestDialCancelledPasswordAsksOnce(t *testing.T) {
+	srv := sshtest.Start(t, sshtest.Options{Password: "hunter2"})
+	p := &fakePrompter{Err: ErrPromptCancelled}
+	_, err := seededDialer(t, srv, newCreds(secrets.NewMem(), p)).Dial(context.Background(), passServer(srv, false))
+	if !errors.Is(err, ErrPromptCancelled) || p.count(PromptPassword) != 1 {
+		t.Fatalf("err = %v, password prompts = %d", err, p.count(PromptPassword))
+	}
+}
+
 func TestDialAgentUsedFirst(t *testing.T) {
 	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
 	sshPub, _ := ssh.NewPublicKey(pub)
