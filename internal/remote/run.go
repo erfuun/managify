@@ -72,12 +72,16 @@ func Run(ctx context.Context, c sshx.Client, cmd string, opts RunOpts, sink func
 	if err != nil {
 		return result(Result{ExitCode: -1, Err: err})
 	}
-	if err := sess.Start(cmd); err != nil {
+	if err := sess.Start(BuildCommand(cmd, opts)); err != nil {
 		return result(Result{ExitCode: -1, Err: err})
+	}
+	if opts.Sudo && opts.SudoPassword != "" {
+		io.WriteString(stdin, opts.SudoPassword+"\n")
 	}
 	stdin.Close()
 
 	var mu sync.Mutex
+	var sudoErr error // first sudo failure seen on stderr; guarded by mu
 	var readers sync.WaitGroup
 	for stream, r := range map[Stream]io.Reader{Stdout: stdout, Stderr: stderr} {
 		readers.Add(1)
@@ -86,6 +90,9 @@ func Run(ctx context.Context, c sshx.Client, cmd string, opts RunOpts, sink func
 			readLines(r, func(text string) {
 				mu.Lock()
 				defer mu.Unlock()
+				if opts.Sudo && stream == Stderr && sudoErr == nil {
+					sudoErr = sudoError(text)
+				}
 				sink(Line{Stream: stream, Text: text})
 			})
 		}()
@@ -113,7 +120,8 @@ func Run(ctx context.Context, c sshx.Client, cmd string, opts RunOpts, sink func
 	case err == nil:
 		return result(Result{})
 	case errors.As(err, &exit):
-		return result(Result{ExitCode: exit.ExitStatus()})
+		// Only a failed run is a sudo failure; a command may mention sudo's words.
+		return result(Result{ExitCode: exit.ExitStatus(), Err: sudoErr})
 	}
 	// Includes *ssh.ExitMissingError: the command ended without a status.
 	return result(Result{ExitCode: -1, Err: err})

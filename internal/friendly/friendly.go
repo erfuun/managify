@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/ssh/knownhosts"
 
 	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/remote"
 	"github.com/erfuun/managify/internal/sshx"
 )
 
@@ -43,6 +44,12 @@ func Text(err error, s inventory.Server) string {
 		return "Cancelled."
 	case errors.Is(err, context.DeadlineExceeded):
 		return s.Name + " did not answer in time."
+	case errors.Is(err, remote.ErrSudoRejected):
+		return "sudo password rejected. Press e to update it."
+	case errors.Is(err, remote.ErrSudoPasswordRequired):
+		return "sudo needs a password on this server. Press e and set a sudo password."
+	case errors.Is(err, remote.ErrSudoNeedsTTY):
+		return "This server requires a tty for sudo. Use the shell."
 	}
 	return err.Error()
 }
@@ -74,6 +81,8 @@ func Short(err error) string {
 		return "cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
+	case errors.Is(err, remote.ErrSudoRejected), errors.Is(err, remote.ErrSudoPasswordRequired), errors.Is(err, remote.ErrSudoNeedsTTY):
+		return "sudo failed"
 	}
 	return "error"
 }
