@@ -1,0 +1,294 @@
+// Package sshtest runs an in-process SSH + SFTP server for tests, so no test
+// ever needs Docker or a real machine. Import it only from _test.go files.
+package sshtest
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"fmt"
+	"io"
+	"net"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
+)
+
+// ExecFunc handles one "exec" request and returns its exit code. ctx is
+// cancelled when the client sends a signal or closes the channel.
+type ExecFunc func(ctx context.Context, cmd string, stdin io.Reader, stdout, stderr io.Writer) int
+
+type Options struct {
+	Password      string        // "" disables password and keyboard-interactive auth
+	AuthorizedKey ssh.PublicKey // nil disables key auth
+	Exec          ExecFunc
+	Shell         bool // accept pty-req/shell; echo each line, exit 0 on "exit"
+	SFTP          bool // "sftp" subsystem backed by one in-memory filesystem
+}
+
+type Server struct {
+	Addr       string
+	Host       string
+	Port       int
+	HostSigner ssh.Signer
+
+	opts   Options
+	cfg    *ssh.ServerConfig
+	ln     net.Listener
+	ctx    context.Context
+	cancel context.CancelFunc
+	fs     sftp.Handlers
+
+	mu      sync.Mutex
+	live    map[net.Conn]struct{}
+	conns   int
+	signals []string
+	ptyTerm string
+	sizes   [][2]int
+}
+
+// Start listens on 127.0.0.1 (never all interfaces, so no firewall prompts)
+// and shuts down in t.Cleanup without waiting for handlers.
+func Start(t testing.TB, o Options) *Server {
+	t.Helper()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostSigner, err := ssh.NewSignerFromKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Server{
+		Addr:       ln.Addr().String(),
+		Host:       "127.0.0.1",
+		Port:       ln.Addr().(*net.TCPAddr).Port,
+		HostSigner: hostSigner,
+		opts:       o,
+		ln:         ln,
+		ctx:        ctx,
+		cancel:     cancel,
+		fs:         sftp.InMemHandler(),
+		live:       map[net.Conn]struct{}{},
+	}
+	s.cfg = s.serverConfig()
+	go s.acceptLoop()
+	t.Cleanup(func() {
+		cancel()
+		ln.Close()
+		s.DropAll()
+	})
+	return s
+}
+
+func (s *Server) serverConfig() *ssh.ServerConfig {
+	cfg := &ssh.ServerConfig{}
+	if pw := s.opts.Password; pw != "" {
+		cfg.PasswordCallback = func(_ ssh.ConnMetadata, got []byte) (*ssh.Permissions, error) {
+			if string(got) == pw {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("wrong password")
+		}
+		cfg.KeyboardInteractiveCallback = func(_ ssh.ConnMetadata, ask ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+			ans, err := ask("", "", []string{"Password: "}, []bool{false})
+			if err == nil && len(ans) == 1 && ans[0] == pw {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("wrong password")
+		}
+	}
+	if k := s.opts.AuthorizedKey; k != nil {
+		cfg.PublicKeyCallback = func(_ ssh.ConnMetadata, got ssh.PublicKey) (*ssh.Permissions, error) {
+			if bytes.Equal(got.Marshal(), k.Marshal()) {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("unknown key")
+		}
+	}
+	cfg.AddHostKey(s.HostSigner)
+	return cfg
+}
+
+func (s *Server) acceptLoop() {
+	for {
+		c, err := s.ln.Accept()
+		if err != nil {
+			return
+		}
+		go s.handleConn(c)
+	}
+}
+
+func (s *Server) handleConn(c net.Conn) {
+	s.mu.Lock()
+	s.live[c] = struct{}{}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		delete(s.live, c)
+		s.mu.Unlock()
+		c.Close()
+	}()
+	sc, chans, reqs, err := ssh.NewServerConn(c, s.cfg)
+	if err != nil {
+		return
+	}
+	defer sc.Close()
+	s.mu.Lock()
+	s.conns++
+	s.mu.Unlock()
+	go ssh.DiscardRequests(reqs)
+	for nc := range chans {
+		if nc.ChannelType() != "session" {
+			nc.Reject(ssh.UnknownChannelType, "only sessions")
+			continue
+		}
+		ch, chReqs, err := nc.Accept()
+		if err != nil {
+			continue
+		}
+		go s.handleSession(ch, chReqs)
+	}
+}
+
+func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	for req := range reqs {
+		switch req.Type {
+		case "exec":
+			var p struct{ Command string }
+			ssh.Unmarshal(req.Payload, &p)
+			req.Reply(true, nil)
+			go s.runExec(ctx, ch, p.Command)
+		case "pty-req":
+			var p struct {
+				Term                   string
+				Columns, Rows, Wpx, Hp uint32
+				Modes                  string
+			}
+			ssh.Unmarshal(req.Payload, &p)
+			s.mu.Lock()
+			s.ptyTerm = p.Term
+			s.sizes = append(s.sizes, [2]int{int(p.Columns), int(p.Rows)})
+			s.mu.Unlock()
+			req.Reply(true, nil)
+		case "window-change":
+			var p struct{ Columns, Rows, Wpx, Hpx uint32 }
+			ssh.Unmarshal(req.Payload, &p)
+			s.mu.Lock()
+			s.sizes = append(s.sizes, [2]int{int(p.Columns), int(p.Rows)})
+			s.mu.Unlock()
+			req.Reply(true, nil)
+		case "shell":
+			req.Reply(s.opts.Shell, nil)
+			if s.opts.Shell {
+				go s.runShell(ch)
+			}
+		case "subsystem":
+			var p struct{ Name string }
+			ssh.Unmarshal(req.Payload, &p)
+			ok := s.opts.SFTP && p.Name == "sftp"
+			req.Reply(ok, nil)
+			if ok {
+				go func() {
+					srv := sftp.NewRequestServer(ch, s.fs)
+					srv.Serve()
+					srv.Close()
+				}()
+			}
+		case "signal":
+			var p struct{ Signal string }
+			ssh.Unmarshal(req.Payload, &p)
+			s.mu.Lock()
+			s.signals = append(s.signals, p.Signal)
+			s.mu.Unlock()
+			cancel()
+		default:
+			req.Reply(false, nil)
+		}
+	}
+}
+
+func (s *Server) runExec(ctx context.Context, ch ssh.Channel, cmd string) {
+	code := 127
+	if s.opts.Exec != nil {
+		code = s.opts.Exec(ctx, cmd, ch, ch, ch.Stderr())
+	} else {
+		fmt.Fprintln(ch.Stderr(), "sshtest: no exec handler")
+	}
+	exit(ch, code)
+}
+
+func (s *Server) runShell(ch ssh.Channel) {
+	r := bufio.NewReader(ch)
+	for {
+		line, err := r.ReadString('\n')
+		line = strings.TrimRight(line, "\r\n")
+		if line == "exit" || err != nil {
+			exit(ch, 0)
+			return
+		}
+		fmt.Fprintf(ch, "%s\r\n", line)
+	}
+}
+
+// exit reports the code, then closes: closing first would lose the code.
+func exit(ch ssh.Channel, code int) {
+	ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{uint32(code)}))
+	ch.Close()
+}
+
+// Conns counts completed handshakes.
+func (s *Server) Conns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.conns
+}
+
+// Signals lists received signal names, e.g. "INT".
+func (s *Server) Signals() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.signals...)
+}
+
+// PtyTerm is the term name from the last pty-req.
+func (s *Server) PtyTerm() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ptyTerm
+}
+
+// WindowSizes lists [cols, rows] from pty-req, then each window-change.
+func (s *Server) WindowSizes() [][2]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][2]int(nil), s.sizes...)
+}
+
+// DropAll closes every live connection, as a network failure would.
+func (s *Server) DropAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.live {
+		c.Close()
+	}
+}
+
+// KnownHostsLine is this server's known_hosts entry.
+func (s *Server) KnownHostsLine() string {
+	return knownhosts.Line([]string{knownhosts.Normalize(s.Addr)}, s.HostSigner.PublicKey())
+}
