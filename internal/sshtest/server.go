@@ -33,6 +33,9 @@ type Options struct {
 	Shell         bool // accept pty-req/shell; echo each line, exit 0 on "exit"
 	SFTP          bool // "sftp" subsystem backed by one in-memory filesystem
 	ECDSA         bool // also offer an ECDSA P-256 host key, like real servers offering several types
+	// IgnoreGlobalRequests never answers global requests such as keepalives,
+	// like a half-open connection after the network silently went away.
+	IgnoreGlobalRequests bool
 }
 
 type Server struct {
@@ -165,7 +168,14 @@ func (s *Server) handleConn(c net.Conn) {
 	s.mu.Lock()
 	s.conns++
 	s.mu.Unlock()
-	go ssh.DiscardRequests(reqs)
+	if s.opts.IgnoreGlobalRequests {
+		go func() {
+			for range reqs {
+			}
+		}()
+	} else {
+		go ssh.DiscardRequests(reqs)
+	}
 	for nc := range chans {
 		if nc.ChannelType() != "session" {
 			nc.Reject(ssh.UnknownChannelType, "only sessions")
