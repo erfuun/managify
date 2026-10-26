@@ -1,0 +1,119 @@
+package tui
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/charmbracelet/bubbles/key"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	"managify/internal/inventory"
+)
+
+func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
+	km, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, nil
+	}
+	n := len(m.d.Inv.Servers)
+	m.cursor = clamp(m.cursor, 0, max(n-1, 0))
+	if m.showHelp {
+		switch {
+		case key.Matches(km, keys.Quit):
+			return m, tea.Quit
+		case key.Matches(km, keys.Help), km.Type == tea.KeyEsc:
+			m.showHelp = false
+		}
+		return m, nil
+	}
+	switch {
+	case key.Matches(km, keys.Quit):
+		return m, tea.Quit
+	case key.Matches(km, keys.Help):
+		m.showHelp = true
+	case key.Matches(km, keys.Up):
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case key.Matches(km, keys.Down):
+		if m.cursor < n-1 {
+			m.cursor++
+		}
+	case key.Matches(km, keys.Select):
+		if s, ok := m.cursorServer(); ok {
+			if m.selected[s.ID] {
+				delete(m.selected, s.ID)
+			} else {
+				m.selected[s.ID] = true
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m Model) viewList() string {
+	w := m.viewWidth()
+	var b strings.Builder
+
+	title := titleStyle.Render("Managify")
+	actions := hintStyle.Render("[a]dd [e]dit [d]el  [?]help")
+	gap := max(w-lipgloss.Width(title)-lipgloss.Width(actions)-2, 1)
+	b.WriteString(" " + title + strings.Repeat(" ", gap) + actions + "\n")
+	rule := " " + strings.Repeat("─", max(w-2, 1)) + "\n"
+	b.WriteString(rule)
+
+	servers := m.d.Inv.Servers
+	if len(servers) == 0 {
+		b.WriteString(" No servers yet. Press a to add one.\n")
+	}
+	nameW, addrW := 8, 16
+	for _, s := range servers {
+		nameW = max(nameW, lipgloss.Width(s.Name))
+		addrW = max(addrW, lipgloss.Width(address(s)))
+	}
+	cursor := clamp(m.cursor, 0, max(len(servers)-1, 0))
+	for i, s := range servers {
+		check := "[ ]"
+		if m.selected[s.ID] {
+			check = "[x]"
+		}
+		row := fmt.Sprintf("%s %-*s %-*s  %s", check, nameW, s.Name, addrW, address(s), m.statusCell(s))
+		if i == cursor {
+			row = cursorStyle.Render(row)
+		}
+		b.WriteString(" " + row + "\n")
+	}
+
+	b.WriteString(rule)
+	if m.footer != "" {
+		b.WriteString(" " + errorStyle.Render(m.footer) + "\n")
+	}
+	b.WriteString(" " + hintStyle.Render("space select · enter shell · r run · u upload · g download · s snippets") + "\n")
+	return b.String()
+}
+
+// statusCell is replaced by live status once connections exist.
+func (m Model) statusCell(inventory.Server) string {
+	return "? unknown"
+}
+
+func address(s inventory.Server) string {
+	a := s.User + "@" + s.Host
+	if s.Port != 22 && s.Port != 0 {
+		a += ":" + strconv.Itoa(s.Port)
+	}
+	return a
+}
+
+func (m Model) viewHelp() string {
+	var b strings.Builder
+	b.WriteString(" " + titleStyle.Render("Keys") + "\n\n")
+	for _, k := range keys.all() {
+		h := k.Help()
+		fmt.Fprintf(&b, "   %-8s %s\n", h.Key, h.Desc)
+	}
+	b.WriteString("\n " + hintStyle.Render("Press ? or esc to close") + "\n")
+	return b.String()
+}
