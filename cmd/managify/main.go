@@ -12,6 +12,7 @@ import (
 	"github.com/erfuun/managify/internal/appdir"
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/sshx"
 	"github.com/erfuun/managify/internal/tui"
 )
 
@@ -41,12 +42,25 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	knownHosts, err := appdir.KnownHostsPath()
+	if err != nil {
+		return err
+	}
+	store, session := secrets.NewKeyring(), secrets.NewSession()
+	prompts := sshx.NewQueue()
+	creds := &sshx.Creds{Store: store, Session: session, Prompter: prompts}
+	pool := sshx.NewPool(&sshx.Dialer{KnownHosts: knownHosts, Creds: creds})
+	defer pool.Close()
+
 	deps := tui.Deps{
 		Inv:     inv,
-		Secrets: secrets.NewKeyring(),
-		Session: secrets.NewSession(),
+		Secrets: store,
+		Session: session,
 		DataDir: dataDir,
 		Now:     time.Now,
+		Pool:    pool,
+		Creds:   creds,
+		Prompts: prompts,
 	}
 	_, err = tea.NewProgram(tui.New(deps), tea.WithAltScreen()).Run()
 	return err

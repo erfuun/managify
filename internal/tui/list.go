@@ -29,7 +29,7 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.showHelp {
 		switch {
 		case key.Matches(km, keys.Quit):
-			return m, tea.Quit
+			return m.quit()
 		case key.Matches(km, keys.Help), km.Type == tea.KeyEsc:
 			m.showHelp = false
 		}
@@ -37,9 +37,15 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	switch {
 	case key.Matches(km, keys.Quit):
-		return m, tea.Quit
+		return m.quit()
 	case key.Matches(km, keys.Help):
 		m.showHelp = true
+	case key.Matches(km, keys.Refresh):
+		// Explicit, so it clears every needs-action mark: locked servers ask again.
+		for id := range m.needsAction {
+			delete(m.needsAction, id)
+		}
+		return m, m.probeAll()
 	case key.Matches(km, keys.Up):
 		if m.cursor > 0 {
 			m.cursor--
@@ -97,7 +103,8 @@ func (m Model) viewList() string {
 		if m.selected[s.ID] {
 			check = "[x]"
 		}
-		row := fmt.Sprintf("%s %-*s %-*s  %s", check, nameW, s.Name, addrW, address(s), m.statusCell(s))
+		// The cursor row is reversed as a whole; inner colors would end it early.
+		row := fmt.Sprintf("%s %-*s %-*s  %s", check, nameW, s.Name, addrW, address(s), m.statusCell(s, i != cursor))
 		if i == cursor {
 			row = cursorStyle.Render(row)
 		}
@@ -109,14 +116,11 @@ func (m Model) viewList() string {
 		b.WriteString(" " + errorStyle.Render(fmt.Sprintf("Delete %s? (y/n)", s.Name)) + "\n")
 	} else if m.footer != "" {
 		b.WriteString(" " + errorStyle.Render(m.footer) + "\n")
+	} else if s, ok := m.cursorServer(); ok && m.downText(s) != "" {
+		b.WriteString(" " + errorStyle.Render(m.downText(s)) + "\n")
 	}
 	b.WriteString(" " + hintStyle.Render("space select · enter shell · r run · u upload · g download · s snippets") + "\n")
 	return b.String()
-}
-
-// statusCell is replaced by live status once connections exist.
-func (m Model) statusCell(inventory.Server) string {
-	return "? unknown"
 }
 
 func address(s inventory.Server) string {

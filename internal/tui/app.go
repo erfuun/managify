@@ -3,20 +3,29 @@
 package tui
 
 import (
+	"context"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/sshx"
 )
 
+// Deps are Managify's services. A nil Pool means no connections at all:
+// no status probes, and the status column shows "? unknown".
 type Deps struct {
 	Inv     *inventory.Inventory
 	Secrets secrets.Store
 	Session *secrets.Session
 	DataDir string
 	Now     func() time.Time
+
+	Pool          *sshx.Pool
+	Creds         *sshx.Creds
+	Prompts       *sshx.Queue
+	ProbeInterval time.Duration // 0 → 30s
 }
 
 type screen int
@@ -38,20 +47,66 @@ type Model struct {
 	confirmDelete string          // server ID awaiting y/n
 
 	form formModel
+
+	// ctx ends when the app quits, stopping probes and the prompt reader.
+	ctx    context.Context
+	cancel context.CancelFunc
+	prompt *promptModel // open credential or host-key question, above any screen
+
+	status      map[string]serverStatus
+	probing     map[string]bool
+	probeGen    map[string]int
+	needsAction map[string]bool // last attempt needs the user; ticks skip it
 }
 
 func New(d Deps) Model {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return Model{d: d, selected: map[string]bool{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	return Model{
+		d: d, selected: map[string]bool{}, ctx: ctx, cancel: cancel,
+		status: map[string]serverStatus{}, probing: map[string]bool{},
+		probeGen: map[string]int{}, needsAction: map[string]bool{},
+	}
 }
 
-func (m Model) Init() tea.Cmd { return nil }
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(m.waitPrompt(), m.probeAll(), m.probeTick())
+}
+
+func (m Model) quit() (tea.Model, tea.Cmd) {
+	m.cancel()
+	return m, tea.Quit
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if ws, ok := msg.(tea.WindowSizeMsg); ok {
-		m.width, m.height = ws.Width, ws.Height
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width, m.height = msg.Width, msg.Height
+		return m, nil
+	case promptMsg:
+		return m.openPrompt(msg.p)
+	case promptGoneMsg:
+		if m.prompt != nil && m.prompt.p == msg.p {
+			close(m.prompt.answered)
+			m.prompt = nil
+			return m, m.waitPrompt()
+		}
+		return m, nil
+	case tea.KeyMsg:
+		if m.prompt != nil {
+			return m.updatePrompt(msg)
+		}
+	case statusMsg:
+		return m.applyStatus(msg), nil
+	case probeTickMsg:
+		return m, tea.Batch(m.probeAll(), m.probeTick())
+	case serverSavedMsg:
+		m.forgetServer(msg.Server.ID)
+		return m, m.retry(msg.Server)
+	case serverDeletedMsg:
+		m.forgetServer(msg.ID)
 		return m, nil
 	}
 	switch m.screen {
@@ -64,16 +119,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	var top string
+	if m.prompt != nil {
+		top = m.viewPrompt()
+	}
 	if m.showHelp {
-		return m.viewHelp()
+		return top + m.viewHelp()
 	}
 	switch m.screen {
 	case screenList:
-		return m.viewList()
+		return top + m.viewList()
 	case screenForm:
-		return m.viewForm()
+		return top + m.viewForm()
 	}
-	return ""
+	return top
 }
 
 // Targets is what an action applies to: the selected servers in list order,
