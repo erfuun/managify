@@ -7,13 +7,14 @@ Setup: a Linux server you can reach over SSH, with a key-auth user and a passwor
 ## Auth
 
 - [ ] **Key auth via file.** Stop the OpenSSH Authentication Agent service, add a key server with `Key path` set, then confirm the fingerprint. Expected: `● up` with load, RAM and disk.
-- [ ] **Key auth via the Windows agent.** Start the agent service and `ssh-add` the key. Clear `Key path` on the server and press `R`. Expected: `● up`, with no passphrase prompt.
+- [ ] **Key auth via the Windows agent.** Start the agent service and `ssh-add` an encrypted key. Leave `Key path` pointing at that same key file, then restart Managify. Expected: `● up`, with no passphrase prompt.
 - [ ] **Agent stopped falls back.** Stop the agent service again, set `Key path` back, then restart Managify. Expected: `● up`, using the key file and asking for its passphrase if it has one.
 - [ ] **Password saved in Credential Manager.** Add a password server with "Save password to keychain" on. Quit and start Managify again. Expected: `● up` with no prompt. Credential Manager lists an entry starting with `managify`.
 - [ ] **Password "ask".** Edit the server and turn "Save password to keychain" off. Restart Managify. Expected: one password prompt. After that, `r`, `u` and `enter` don't ask again until you quit.
 
 ## Host keys
 
+- [ ] **New host key needs `yes`.** Add a server that isn't in known_hosts. Expected: the fingerprint prompt ignores `y` + enter (`Type yes or no.`), and only `yes` + enter trusts the key.
 - [ ] **Changed host key is blocked.** Change the server's line in `~/.ssh/known_hosts` to another key, then press `R`. Expected: `Host key for <name> changed! Connection blocked.`, with the path to known_hosts and the entry to remove. No command runs.
 
 ## Run and sudo
@@ -22,11 +23,13 @@ Setup: a Linux server you can reach over SSH, with a key-auth user and a passwor
 - [ ] **sudo on a password server.** `r`, `ctrl+o`, `whoami`. Expected: `root`, and no password prompt in the pane.
 - [ ] **sudo `none` on a NOPASSWD server.** On a key server with "Sudo password" `none`: `r`, `ctrl+o`, `whoami`. Expected: `root`.
 - [ ] **sudo on a `requiretty` server.** `r`, `ctrl+o`, `whoami`. Expected: the pane title says `This server requires a tty for sudo. Use the shell.`
+- [ ] **Tabs and escape codes in output.** Run `cat /etc/fstab` (or another tab-indented file) and `ls --color=always`. Expected: the columns line up, colour codes don't appear as text, and the run header stays at the top.
 - [ ] **ctrl+c cancel message.** Run `sleep 60`, then press `ctrl+c`. Expected: `✗ cancelled locally; process may still be running on <name>`. `esc` returns to the list.
 
 ## Shell
 
 - [ ] **Shell and htop resize.** Press `enter` on a server, check that `stty size` matches the window, and run `htop`. Resize the Windows Terminal window. Expected: htop redraws to the new size. Arrow keys and tab completion work. `ctrl+c` stops only the remote command.
+- [ ] **Shell after sleep.** Connect once, sleep the laptop for a few minutes, wake it, and press `enter` on the server. Expected: a shell within about 5 s plus a normal connect, never a blank screen.
 - [ ] **First key after the shell.** Type `exit` in the shell. Expected: the list comes back, and the first key you press (for example `j`) registers.
 
 ## Files
