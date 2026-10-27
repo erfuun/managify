@@ -93,6 +93,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case runBatchMsg:
 		return m.applyRunBatch(msg)
+	case shellReadyMsg:
+		return m.shellReady(msg)
+	case shellDoneMsg:
+		return m.shellDone(msg)
 	case promptMsg:
 		return m.openPrompt(msg.p)
 	case promptGoneMsg:

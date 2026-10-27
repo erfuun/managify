@@ -9,7 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/erfuun/managify/internal/friendly"
 	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/remote"
+	"github.com/erfuun/managify/internal/sshx"
 )
 
 func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -53,6 +56,10 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case key.Matches(km, keys.Down):
 		if m.cursor < n-1 {
 			m.cursor++
+		}
+	case key.Matches(km, keys.Shell):
+		if s, ok := m.cursorServer(); ok && m.d.Pool != nil {
+			return m, m.connectShell(s)
 		}
 	case key.Matches(km, keys.Run):
 		if t := m.Targets(); len(t) > 0 && m.d.Pool != nil {
@@ -144,4 +151,51 @@ func (m Model) viewHelp() string {
 	}
 	b.WriteString("\n " + hintStyle.Render("Press ? or esc to close") + "\n")
 	return b.String()
+}
+
+// shellReadyMsg means the server is connected and the terminal can be handed over.
+type shellReadyMsg struct {
+	server inventory.Server
+	client sshx.Client
+}
+
+// shellDoneMsg ends a shell, or reports why it never started (connectErr).
+type shellDoneMsg struct {
+	server     inventory.Server
+	err        error
+	connectErr bool
+}
+
+func (m Model) connectShell(s inventory.Server) tea.Cmd {
+	pool, ctx := m.d.Pool, m.ctx
+	return func() tea.Msg {
+		c, err := pool.Get(ctx, s)
+		if err != nil {
+			return shellDoneMsg{server: s, err: err, connectErr: true}
+		}
+		return shellReadyMsg{server: s, client: c}
+	}
+}
+
+func (m Model) shellReady(msg shellReadyMsg) (tea.Model, tea.Cmd) {
+	// Opening a shell is an explicit action: it clears a needs-action mark.
+	delete(m.needsAction, msg.server.ID)
+	m.footer = ""
+	return m, tea.Exec(remote.NewShell(msg.client), func(err error) tea.Msg {
+		return shellDoneMsg{server: msg.server, err: err}
+	})
+}
+
+func (m Model) shellDone(msg shellDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.err == nil {
+		return m, nil
+	}
+	if m.ctx.Err() != nil {
+		return m, nil
+	}
+	m.footer = friendly.Text(msg.err, msg.server)
+	if msg.connectErr && needsUser(msg.err) {
+		m.needsAction[msg.server.ID] = true
+	}
+	return m, nil
 }
