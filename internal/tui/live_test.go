@@ -103,3 +103,16 @@ func waitForRe(t *testing.T, tm *teatest.TestModel, patterns ...string) {
 		return true
 	}, teatest.WithDuration(5*time.Second), teatest.WithCheckInterval(20*time.Millisecond))
 }
+
+// waitForWithin is waitFor with a longer limit, for heavy output.
+func waitForWithin(t *testing.T, tm *teatest.TestModel, d time.Duration, subs ...string) {
+	t.Helper()
+	teatest.WaitFor(t, tm.Output(), func(b []byte) bool {
+		for _, s := range subs {
+			if !bytes.Contains(b, []byte(s)) {
+				return false
+			}
+		}
+		return true
+	}, teatest.WithDuration(d), teatest.WithCheckInterval(50*time.Millisecond))
+}

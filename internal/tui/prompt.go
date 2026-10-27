@@ -62,6 +62,7 @@ func (m Model) openPrompt(p *sshx.Pending) (Model, tea.Cmd) {
 	in.Focus()
 	pm := &promptModel{p: p, input: in, answered: make(chan struct{})}
 	m.prompt = pm
+	m.layoutRun() // make room above the run panes
 	return m, m.watchPrompt(*pm)
 }
 
@@ -92,9 +93,14 @@ func (m Model) updatePrompt(km tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m Model) answer(r sshx.PromptReply) (Model, tea.Cmd) {
 	m.prompt.p.Reply(r)
+	m.closePrompt()
+	return m, m.waitPrompt()
+}
+
+func (m *Model) closePrompt() {
 	close(m.prompt.answered)
 	m.prompt = nil
-	return m, m.waitPrompt()
+	m.layoutRun()
 }
 
 func (m Model) viewPrompt() string {

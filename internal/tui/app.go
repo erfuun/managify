@@ -4,6 +4,7 @@ package tui
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -33,6 +34,8 @@ type screen int
 const (
 	screenList screen = iota
 	screenForm
+	screenCmdInput
+	screenRun
 )
 
 type Model struct {
@@ -46,7 +49,9 @@ type Model struct {
 	selected      map[string]bool // server ID → selected
 	confirmDelete string          // server ID awaiting y/n
 
-	form formModel
+	form     formModel
+	cmdInput cmdInputModel
+	run      *runModel // the latest run; kept after leaving its screen
 
 	// ctx ends when the app quits, stopping probes and the prompt reader.
 	ctx    context.Context
@@ -84,13 +89,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.layoutRun()
 		return m, nil
+	case runBatchMsg:
+		return m.applyRunBatch(msg)
 	case promptMsg:
 		return m.openPrompt(msg.p)
 	case promptGoneMsg:
 		if m.prompt != nil && m.prompt.p == msg.p {
-			close(m.prompt.answered)
-			m.prompt = nil
+			m.closePrompt()
 			return m, m.waitPrompt()
 		}
 		return m, nil
@@ -114,11 +121,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateList(msg)
 	case screenForm:
 		return m.updateForm(msg)
+	case screenCmdInput:
+		return m.updateCmdInput(msg)
+	case screenRun:
+		return m.updateRun(msg)
 	}
 	return m, nil
 }
 
+// View keeps the frame within the terminal height. Bubble Tea drops lines
+// from the top of a frame that is too tall, which would hide an open prompt;
+// cutting from the bottom keeps it on screen.
 func (m Model) View() string {
+	v := strings.TrimSuffix(m.view(), "\n")
+	if m.height <= 0 {
+		return v
+	}
+	lines := strings.Split(v, "\n")
+	if len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) view() string {
 	var top string
 	if m.prompt != nil {
 		top = m.viewPrompt()
@@ -131,6 +157,10 @@ func (m Model) View() string {
 		return top + m.viewList()
 	case screenForm:
 		return top + m.viewForm()
+	case screenCmdInput:
+		return top + m.viewCmdInput()
+	case screenRun:
+		return top + m.viewRun()
 	}
 	return top
 }

@@ -54,6 +54,10 @@ func (m Model) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < n-1 {
 			m.cursor++
 		}
+	case key.Matches(km, keys.Run):
+		if t := m.Targets(); len(t) > 0 && m.d.Pool != nil {
+			return m.openCmdInput(t)
+		}
 	case key.Matches(km, keys.Add):
 		return m.openForm(nil)
 	// Edit and delete act on the cursor row, never the whole selection.
