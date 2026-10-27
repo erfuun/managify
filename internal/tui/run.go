@@ -130,15 +130,15 @@ func (m Model) applyRunBatch(msg runBatchMsg) (Model, tea.Cmd) {
 		}
 		switch ev.Kind {
 		case job.EvLine:
-			text := ev.Line.Text
+			text := cleanText(ev.Line.Text)
 			if ev.Line.Stream == remote.Stderr {
 				text = stderrStyle.Render(text)
 			}
 			p.add(text)
 		case job.EvNote:
-			p.add(hintStyle.Render("# " + ev.Text))
+			p.add(hintStyle.Render("# " + cleanText(ev.Text)))
 		case job.EvWarn:
-			p.add(stderrStyle.Render("! " + ev.Text))
+			p.add(stderrStyle.Render("! " + cleanText(ev.Text)))
 		case job.EvProgress:
 			p.progress(ev.Text, ev.Progress)
 		case job.EvUploaded:
