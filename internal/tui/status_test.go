@@ -49,11 +49,30 @@ func TestHostKeyPromptThenUp(t *testing.T) {
 	srv := probeServer(t)
 	s := addLive(t, d, env, srv, "web-1", savedPassword)
 	tm := start(t, d)
-	waitFor(t, tm, "New server web-1 ("+s.Addr()+")", "Key fingerprint: SHA256:", "Trust and remember this key? (y/n)")
-	press(tm, "y")
+	waitFor(t, tm, "New server web-1 ("+s.Addr()+")", "Key fingerprint: SHA256:", "Type yes to trust and remember this key:")
+	// A stray "y" (say, typeahead meant for the list) must not trust a key.
+	press(tm, "y", "enter")
+	waitFor(t, tm, "Type yes or no.")
+	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlU})
+	typeText(tm, "yes")
+	press(tm, "enter")
 	waitFor(t, tm, "● up")
 	press(tm, "q")
 	final(t, tm)
+}
+
+func TestHostKeyNoDeclines(t *testing.T) {
+	d, env := liveDeps(t, 0)
+	addLive(t, d, env, probeServer(t), "web-1", savedPassword)
+	tm := start(t, d)
+	waitFor(t, tm, "Type yes to trust")
+	typeText(tm, "no")
+	press(tm, "enter")
+	waitFor(t, tm, "not trusted")
+	press(tm, "q")
+	if m := final(t, tm); m.prompt != nil {
+		t.Fatal("prompt still open")
+	}
 }
 
 func TestStaleStatusIgnoredAfterDelete(t *testing.T) {
