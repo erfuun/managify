@@ -12,6 +12,7 @@ import (
 	"github.com/erfuun/managify/internal/appdir"
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/snippets"
 	"github.com/erfuun/managify/internal/sshx"
 	"github.com/erfuun/managify/internal/tui"
 )
@@ -42,6 +43,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	snips, err := snippets.Load(filepath.Join(configDir, "snippets.yaml"))
+	if err != nil {
+		return err
+	}
 	knownHosts, err := appdir.KnownHostsPath()
 	if err != nil {
 		return err
@@ -53,14 +58,15 @@ func run() error {
 	defer pool.Close()
 
 	deps := tui.Deps{
-		Inv:     inv,
-		Secrets: store,
-		Session: session,
-		DataDir: dataDir,
-		Now:     time.Now,
-		Pool:    pool,
-		Creds:   creds,
-		Prompts: prompts,
+		Inv:      inv,
+		Secrets:  store,
+		Session:  session,
+		DataDir:  dataDir,
+		Now:      time.Now,
+		Snippets: snips,
+		Pool:     pool,
+		Creds:    creds,
+		Prompts:  prompts,
 	}
 	_, err = tea.NewProgram(tui.New(deps), tea.WithAltScreen()).Run()
 	return err

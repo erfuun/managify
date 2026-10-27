@@ -248,6 +248,8 @@ func (m Model) updateRun(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch km.String() {
 	case "ctrl+c":
 		r.cancel()
+	case "ctrl+s":
+		return m.saveRunAsSnippet()
 	case "esc":
 		if r.running > 0 {
 			r.hint = "ctrl+c to cancel"
@@ -337,6 +339,9 @@ func (m Model) viewRun() string {
 	}
 	b.WriteString(" " + hintStyle.Render("logs: "+filepath.Join(m.d.DataDir, "outputs")+string(filepath.Separator)) + "\n")
 	keys := "pgup/pgdn scroll · ctrl+c cancel · esc back"
+	if r.running == 0 && r.spec.Download == "" && m.d.Snippets != nil {
+		keys = "pgup/pgdn scroll · ctrl+s save as snippet · esc back"
+	}
 	if len(r.panes) > 1 {
 		keys = "tab next pane · " + keys
 	}

@@ -11,17 +11,19 @@ import (
 
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/snippets"
 	"github.com/erfuun/managify/internal/sshx"
 )
 
 // Deps are Managify's services. A nil Pool means no connections at all:
 // no status probes, and the status column shows "? unknown".
 type Deps struct {
-	Inv     *inventory.Inventory
-	Secrets secrets.Store
-	Session *secrets.Session
-	DataDir string
-	Now     func() time.Time
+	Inv      *inventory.Inventory
+	Secrets  secrets.Store
+	Session  *secrets.Session
+	DataDir  string
+	Now      func() time.Time
+	Snippets *snippets.Store // nil disables the snippets screen
 
 	Pool          *sshx.Pool
 	Creds         *sshx.Creds
@@ -38,6 +40,8 @@ const (
 	screenRun
 	screenUpload
 	screenDownload
+	screenSnippets
+	screenSnippetForm
 )
 
 type Model struct {
@@ -56,6 +60,8 @@ type Model struct {
 	run      *runModel // the latest run; kept after leaving its screen
 	upload   uploadModel
 	download downloadModel
+	snipList snippetList
+	snipForm snippetForm
 
 	lastLocalDir string // where the picker last picked a file, this session
 
@@ -139,6 +145,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateUpload(msg)
 	case screenDownload:
 		return m.updateDownload(msg)
+	case screenSnippets:
+		return m.updateSnippets(msg)
+	case screenSnippetForm:
+		return m.updateSnippetForm(msg)
 	}
 	return m, nil
 }
@@ -179,6 +189,10 @@ func (m Model) view() string {
 		return top + m.viewUpload()
 	case screenDownload:
 		return top + m.viewDownload()
+	case screenSnippets:
+		return top + m.viewSnippets()
+	case screenSnippetForm:
+		return top + m.viewSnippetForm()
 	}
 	return top
 }

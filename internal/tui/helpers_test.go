@@ -14,6 +14,7 @@ import (
 
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/snippets"
 )
 
 func TestMain(m *testing.M) {
@@ -52,12 +53,17 @@ func testDeps(t *testing.T, servers ...inventory.Server) Deps {
 			t.Fatal(err)
 		}
 	}
+	snips, err := snippets.Load(filepath.Join(filepath.Dir(p), "snippets.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return Deps{
-		Inv:     inv,
-		Secrets: secrets.NewMem(),
-		Session: secrets.NewSession(),
-		DataDir: t.TempDir(),
-		Now:     time.Now,
+		Inv:      inv,
+		Snippets: snips,
+		Secrets:  secrets.NewMem(),
+		Session:  secrets.NewSession(),
+		DataDir:  t.TempDir(),
+		Now:      time.Now,
 	}
 }
 
