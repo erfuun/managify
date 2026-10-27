@@ -36,6 +36,9 @@ type Options struct {
 	// IgnoreGlobalRequests never answers global requests such as keepalives,
 	// like a half-open connection after the network silently went away.
 	IgnoreGlobalRequests bool
+	// PublicKeyAlgorithms limits key-auth signature algorithms, e.g. to refuse
+	// SHA-1 "ssh-rsa" like OpenSSH 8.8+. nil keeps x/crypto's defaults.
+	PublicKeyAlgorithms []string
 }
 
 type Server struct {
@@ -109,7 +112,7 @@ func Start(t testing.TB, o Options) *Server {
 }
 
 func (s *Server) serverConfig() *ssh.ServerConfig {
-	cfg := &ssh.ServerConfig{}
+	cfg := &ssh.ServerConfig{PublicKeyAuthAlgorithms: s.opts.PublicKeyAlgorithms}
 	if pw := s.opts.Password; pw != "" {
 		cfg.PasswordCallback = func(_ ssh.ConnMetadata, got []byte) (*ssh.Permissions, error) {
 			if string(got) == pw {
