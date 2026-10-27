@@ -50,6 +50,10 @@ type pane struct {
 	vp     viewport.Model
 	done   bool
 	res    remote.Result
+
+	// The transfer's progress line, updated in place; prog is -1 when none.
+	prog      int
+	progLabel string
 }
 
 // startRun runs spec on every target at once and opens the run view.
@@ -65,7 +69,7 @@ func (m Model) startRun(spec job.Spec, targets []inventory.Server) (Model, tea.C
 	app := m.ctx
 	var wg sync.WaitGroup
 	for _, s := range targets {
-		p := &pane{server: s, vp: viewport.New(0, 0)}
+		p := &pane{server: s, vp: viewport.New(0, 0), prog: -1}
 		r.panes = append(r.panes, p)
 		r.byID[s.ID] = p
 		wg.Add(1)
@@ -134,7 +138,11 @@ func (m Model) applyRunBatch(msg runBatchMsg) (Model, tea.Cmd) {
 		case job.EvNote:
 			p.add(hintStyle.Render("# " + ev.Text))
 		case job.EvWarn:
-			p.add(errorStyle.Render("! " + ev.Text))
+			p.add(stderrStyle.Render("! " + ev.Text))
+		case job.EvProgress:
+			p.progress(ev.Text, ev.Progress)
+		case job.EvUploaded:
+			m.rememberRemoteDir(ev.ServerID, ev.Text)
 		case job.EvDone:
 			p.done, p.res = true, ev.Result
 			r.running--
@@ -172,8 +180,23 @@ func (m Model) applyRunBatch(msg runBatchMsg) (Model, tea.Cmd) {
 func (p *pane) add(line string) {
 	p.lines = append(p.lines, line)
 	if len(p.lines) > maxPaneLines+1000 { // trim in steps, not on every line
-		p.lines = append([]string(nil), p.lines[len(p.lines)-maxPaneLines:]...)
+		cut := len(p.lines) - maxPaneLines
+		p.lines = append([]string(nil), p.lines[cut:]...)
+		if p.prog -= cut; p.prog < 0 {
+			p.prog = -1
+		}
 	}
+}
+
+// progress shows "label N%", replacing the previous line for the same label.
+func (p *pane) progress(label string, f float64) {
+	text := fmt.Sprintf("%s %d%%", label, int(f*100))
+	if p.prog >= 0 && p.progLabel == label {
+		p.lines[p.prog] = text
+		return
+	}
+	p.add(text)
+	p.prog, p.progLabel = len(p.lines)-1, label
 }
 
 // refresh shows the latest lines, following the output only when the pane
@@ -263,6 +286,15 @@ func (m Model) viewRun() string {
 	r := m.run
 	var b strings.Builder
 	head := "Run: " + r.spec.Command
+	switch {
+	case r.spec.Download != "":
+		head = "Download: " + r.spec.Download
+	case r.spec.Upload != nil:
+		head = "Upload: " + filepath.Base(r.spec.Upload.Local) + " → " + r.spec.Upload.Remote
+		if r.spec.Command != "" {
+			head += " · then: " + r.spec.Command
+		}
+	}
 	if r.spec.Sudo {
 		head += "  (sudo)"
 	}
@@ -299,6 +331,9 @@ func (m Model) viewRun() string {
 	}
 	if r.hint != "" {
 		b.WriteString(" " + errorStyle.Render(r.hint) + "\n")
+	}
+	if r.spec.Download != "" {
+		b.WriteString(" " + hintStyle.Render("files: "+downloadsHint(m.d.DataDir)) + "\n")
 	}
 	b.WriteString(" " + hintStyle.Render("logs: "+filepath.Join(m.d.DataDir, "outputs")+string(filepath.Separator)) + "\n")
 	keys := "pgup/pgdn scroll · ctrl+c cancel · esc back"

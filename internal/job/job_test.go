@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -188,5 +189,146 @@ func TestExecuteLogFailureWarnsAndRuns(t *testing.T) {
 	last := done(t, ev.got)
 	if !warned || !sawLine || last.LogPath != "" || last.Result.ExitCode != 0 {
 		t.Fatalf("events = %+v", ev.got)
+	}
+}
+
+// transferServer serves SFTP (with /tmp) and runs "bash /tmp/deploy.sh".
+func transferServer(t *testing.T) *sshtest.Server {
+	t.Helper()
+	srv := testkit.Start(t, sshtest.Options{SFTP: true, Exec: func(_ context.Context, cmd string, _ io.Reader, stdout, _ io.Writer) int {
+		if cmd != "bash /tmp/deploy.sh" {
+			fmt.Fprintf(stdout, "unexpected command %q", cmd)
+			return 127
+		}
+		fmt.Fprintln(stdout, "deployed")
+		return 0
+	}})
+	sc, err := testkit.Dial(t, srv).NewSFTP()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.Close()
+	if err := sc.Mkdir("/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	return srv
+}
+
+func localFile(t *testing.T, name, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(p, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// kinds lists event kinds with their text, for order checks.
+func kinds(got []Event) []string {
+	var out []string
+	for _, e := range got {
+		switch e.Kind {
+		case EvLine:
+			out = append(out, "line:"+e.Line.Text)
+		case EvWarn:
+			out = append(out, "warn")
+		case EvUploaded:
+			out = append(out, "uploaded:"+e.Text)
+		case EvDownloaded:
+			out = append(out, "downloaded")
+		case EvDone:
+			out = append(out, "done")
+		}
+	}
+	return out
+}
+
+func TestUploadThenRun(t *testing.T) {
+	env := testkit.NewEnv(t)
+	s := env.PasswordServer(t, transferServer(t), "web-1")
+	local := localFile(t, "deploy.sh", "echo deployed\n")
+	var ev events
+	Execute(context.Background(), deps(t, env), Spec{Upload: &Upload{Local: local, Remote: "/tmp/"}, Command: "bash /tmp/deploy.sh"}, s, ev.emit)
+
+	if got := strings.Join(kinds(ev.got), ","); got != "uploaded:/tmp/deploy.sh,line:deployed,done" {
+		t.Fatalf("events = %s", got)
+	}
+	last := done(t, ev.got)
+	if last.Result.ExitCode != 0 || last.Result.Err != nil {
+		t.Fatalf("done = %+v", last)
+	}
+	b, _ := os.ReadFile(last.LogPath)
+	if !strings.Contains(string(b), "# upload: "+local+" -> /tmp/") || !strings.Contains(string(b), "# uploaded to /tmp/deploy.sh\n") {
+		t.Fatalf("log =\n%s", b)
+	}
+	var sawProgress bool
+	for _, e := range ev.got {
+		sawProgress = sawProgress || (e.Kind == EvProgress && e.Progress == 1)
+	}
+	if !sawProgress {
+		t.Fatal("no final progress event")
+	}
+}
+
+func TestUploadOnlyIsDone(t *testing.T) {
+	env := testkit.NewEnv(t)
+	s := env.PasswordServer(t, transferServer(t), "web-1")
+	var ev events
+	Execute(context.Background(), deps(t, env), Spec{Upload: &Upload{Local: localFile(t, "app.conf", "x"), Remote: "/tmp/"}}, s, ev.emit)
+	if got := strings.Join(kinds(ev.got), ","); got != "uploaded:/tmp/app.conf,done" || done(t, ev.got).Result.ExitCode != 0 {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestUploadCRLFWarns(t *testing.T) {
+	env := testkit.NewEnv(t)
+	s := env.PasswordServer(t, transferServer(t), "web-1")
+	var ev events
+	Execute(context.Background(), deps(t, env), Spec{Upload: &Upload{Local: localFile(t, "deploy.sh", "echo a\r\necho b\r\n"), Remote: "/tmp/"}}, s, ev.emit)
+	const want = `warning: deploy.sh has Windows line endings (CRLF); shell scripts may fail with $'\r': command not found`
+	if k := kinds(ev.got); len(k) < 2 || k[0] != "warn" || k[1] != "uploaded:/tmp/deploy.sh" {
+		t.Fatalf("events = %v", k)
+	}
+	for _, e := range ev.got {
+		if e.Kind == EvWarn && e.Text != want {
+			t.Fatalf("warning = %q", e.Text)
+		}
+	}
+}
+
+func TestUploadFailureIsDone(t *testing.T) {
+	env := testkit.NewEnv(t)
+	s := env.PasswordServer(t, transferServer(t), "web-1")
+	var ev events
+	Execute(context.Background(), deps(t, env), Spec{Upload: &Upload{Local: localFile(t, "a", "x"), Remote: "/nope/dir/a"}, Command: "bash /tmp/deploy.sh"}, s, ev.emit)
+	last := done(t, ev.got)
+	if last.Result.Err == nil || strings.Contains(strings.Join(kinds(ev.got), ","), "line:") {
+		t.Fatalf("events = %v, done = %+v", kinds(ev.got), last)
+	}
+}
+
+func TestDownloadToSafeDir(t *testing.T) {
+	env := testkit.NewEnv(t)
+	srv := transferServer(t)
+	s := env.PasswordServer(t, srv, "web:1")
+	if _, err := remote.Upload(context.Background(), testkit.Dial(t, srv), localFile(t, "syslog", "boot ok\n"), "/tmp/", nil); err != nil {
+		t.Fatal(err)
+	}
+	d := deps(t, env)
+	var ev events
+	Execute(context.Background(), d, Spec{Download: "/tmp/syslog"}, s, ev.emit)
+
+	want := filepath.Join(d.DataDir, "downloads", "web_1", "syslog")
+	var got string
+	for _, e := range ev.got {
+		if e.Kind == EvDownloaded {
+			got = e.Text
+		}
+	}
+	if got != want || done(t, ev.got).Result.Err != nil {
+		t.Fatalf("downloaded to %q, events %+v", got, ev.got)
+	}
+	if b, _ := os.ReadFile(want); string(b) != "boot ok\n" {
+		t.Fatalf("file = %q", b)
 	}
 }

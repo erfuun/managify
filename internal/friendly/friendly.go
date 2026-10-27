@@ -40,7 +40,7 @@ func Text(err error, s inventory.Server) string {
 			mismatch.Server.Name, entry, mismatch.KnownHostsPath)
 	case errors.Is(err, sshx.ErrHostKeyRejected):
 		return "Host key not trusted. Connection cancelled."
-	case errors.Is(err, sshx.ErrPromptCancelled):
+	case errors.Is(err, sshx.ErrPromptCancelled), errors.Is(err, context.Canceled):
 		return "Cancelled."
 	case errors.Is(err, context.DeadlineExceeded):
 		return s.Name + " did not answer in time."
@@ -77,7 +77,7 @@ func Short(err error) string {
 		return "HOST KEY CHANGED"
 	case errors.Is(err, sshx.ErrHostKeyRejected):
 		return "not trusted"
-	case errors.Is(err, sshx.ErrPromptCancelled):
+	case errors.Is(err, sshx.ErrPromptCancelled), errors.Is(err, context.Canceled):
 		return "cancelled"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "timeout"

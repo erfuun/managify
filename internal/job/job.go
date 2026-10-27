@@ -5,6 +5,9 @@ package job
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/erfuun/managify/internal/inventory"
@@ -51,20 +54,14 @@ type Deps struct {
 	Now     func() time.Time
 }
 
-// Execute runs spec on s. EvDone is emitted exactly once, last.
+// Execute runs spec on s: an optional upload, then an optional command, or a
+// download. EvDone is emitted exactly once, last.
 func Execute(ctx context.Context, d Deps, spec Spec, s inventory.Server, emit func(Event)) {
 	now := d.Now
 	if now == nil {
 		now = time.Now
 	}
-	start := now()
-	finish := func(r remote.Result, logPath string) {
-		emit(Event{ServerID: s.ID, Kind: EvDone, Result: r, LogPath: logPath})
-	}
-	failed := func(err error) {
-		finish(remote.Result{ExitCode: -1, Err: err, Duration: now().Sub(start)}, "")
-	}
-	warn := func(text string) { emit(Event{ServerID: s.ID, Kind: EvWarn, Text: text}) }
+	x := &execution{d: d, s: s, emit: emit, start: now(), now: now}
 
 	c, err := d.Pool.Get(ctx, s)
 	if err != nil {
@@ -72,43 +69,143 @@ func Execute(ctx context.Context, d Deps, spec Spec, s inventory.Server, emit fu
 		if errors.As(err, &auth) {
 			d.Pool.Evict(s.ID)
 		}
-		failed(err)
+		x.failed(err)
 		return
 	}
-	opts := remote.RunOpts{Sudo: spec.Sudo}
-	if spec.Sudo {
+	opts := remote.RunOpts{Sudo: spec.Sudo && spec.Command != ""}
+	if opts.Sudo {
 		if opts.SudoPassword, err = d.Creds.SudoPassword(ctx, s); err != nil {
-			failed(err)
+			x.failed(err)
 			return
 		}
 	}
 
-	// A log that cannot be written must not stop the command.
-	log, err := outputs.Begin(d.DataDir, s, outputs.Header{Command: spec.Command, Sudo: spec.Sudo}, start)
-	if err != nil {
-		warn("Output is not being saved: could not create the log: " + err.Error())
-		log = nil
-	}
-	logFailed := false
-	res := remote.Run(ctx, c, spec.Command, opts, func(ln remote.Line) {
-		if log != nil && !logFailed {
-			if err := log.Line(ln); err != nil {
-				logFailed = true
-				warn("Output is no longer being saved: writing the log failed: " + err.Error())
-			}
+	x.begin(header(spec))
+	var res remote.Result
+	switch {
+	case spec.Download != "":
+		res = x.download(ctx, c, spec.Download)
+	case spec.Upload != nil:
+		if res = x.upload(ctx, c, *spec.Upload); res.Err == nil && spec.Command != "" {
+			res = x.run(ctx, c, spec.Command, opts)
 		}
-		emit(Event{ServerID: s.ID, Kind: EvLine, Line: ln})
-	})
-
-	var logPath string
-	if log != nil {
-		logPath = log.Path()
-		if err := log.Finish(res); err != nil && !logFailed {
-			warn("The log may be incomplete: " + err.Error())
-		}
+	default:
+		res = x.run(ctx, c, spec.Command, opts)
 	}
+	logPath := x.finishLog(res)
 	if errors.Is(res.Err, remote.ErrSudoRejected) {
 		d.Creds.ForgetSudo(s)
 	}
-	finish(res, logPath)
+	emit(Event{ServerID: s.ID, Kind: EvDone, Result: res, LogPath: logPath})
+}
+
+// header is the log header; a transfer without a command says so.
+func header(spec Spec) outputs.Header {
+	h := outputs.Header{Command: spec.Command, Sudo: spec.Sudo && spec.Command != "", Download: spec.Download}
+	if spec.Upload != nil {
+		h.Upload = spec.Upload.Local + " -> " + spec.Upload.Remote
+	}
+	if h.Command == "" {
+		h.Command = "(none)"
+	}
+	return h
+}
+
+// execution is one Execute call's state: the server, the log, the clock.
+type execution struct {
+	d         Deps
+	s         inventory.Server
+	emit      func(Event)
+	start     time.Time
+	now       func() time.Time
+	log       *outputs.Log
+	logFailed bool
+}
+
+func (x *execution) failed(err error) {
+	x.emit(Event{ServerID: x.s.ID, Kind: EvDone, Result: x.result(err)})
+}
+
+func (x *execution) result(err error) remote.Result {
+	return remote.Result{ExitCode: -1, Err: err, Duration: x.now().Sub(x.start)}
+}
+
+func (x *execution) warn(text string) { x.emit(Event{ServerID: x.s.ID, Kind: EvWarn, Text: text}) }
+
+// begin opens the log. One that cannot be written must not stop the job.
+func (x *execution) begin(h outputs.Header) {
+	log, err := outputs.Begin(x.d.DataDir, x.s, h, x.start)
+	if err != nil {
+		x.warn("Output is not being saved: could not create the log: " + err.Error())
+		return
+	}
+	x.log = log
+}
+
+func (x *execution) logWrite(write func(*outputs.Log) error) {
+	if x.log == nil || x.logFailed {
+		return
+	}
+	if err := write(x.log); err != nil {
+		x.logFailed = true
+		x.warn("Output is no longer being saved: writing the log failed: " + err.Error())
+	}
+}
+
+// note goes to both the pane and the log.
+func (x *execution) note(kind EventKind, text string) {
+	x.emit(Event{ServerID: x.s.ID, Kind: kind, Text: text})
+	x.logWrite(func(l *outputs.Log) error { return l.Note(text) })
+}
+
+func (x *execution) finishLog(res remote.Result) string {
+	if x.log == nil {
+		return ""
+	}
+	if err := x.log.Finish(res); err != nil && !x.logFailed {
+		x.warn("The log may be incomplete: " + err.Error())
+	}
+	return x.log.Path()
+}
+
+func (x *execution) run(ctx context.Context, c sshx.Client, cmd string, opts remote.RunOpts) remote.Result {
+	return remote.Run(ctx, c, cmd, opts, func(ln remote.Line) {
+		x.logWrite(func(l *outputs.Log) error { return l.Line(ln) })
+		x.emit(Event{ServerID: x.s.ID, Kind: EvLine, Line: ln})
+	})
+}
+
+func (x *execution) progress(label string) remote.Progress {
+	return func(done, total int64) {
+		f := 1.0
+		if total > 0 {
+			f = float64(done) / float64(total)
+		}
+		x.emit(Event{ServerID: x.s.ID, Kind: EvProgress, Text: label, Progress: f})
+	}
+}
+
+func (x *execution) upload(ctx context.Context, c sshx.Client, u Upload) remote.Result {
+	name := filepath.Base(u.Local)
+	if crlf, err := remote.HasCRLF(u.Local); err == nil && crlf {
+		x.note(EvWarn, fmt.Sprintf(`warning: %s has Windows line endings (CRLF); shell scripts may fail with $'\r': command not found`, name))
+	}
+	final, err := remote.Upload(ctx, c, u.Local, u.Remote, x.progress("uploading "+name))
+	if err != nil {
+		return x.result(err)
+	}
+	x.emit(Event{ServerID: x.s.ID, Kind: EvUploaded, Text: final})
+	x.note(EvNote, "uploaded to "+final)
+	return remote.Result{Duration: x.now().Sub(x.start)}
+}
+
+func (x *execution) download(ctx context.Context, c sshx.Client, remotePath string) remote.Result {
+	dir := filepath.Join(x.d.DataDir, "downloads", outputs.SafeName(x.s.Name))
+	local, err := remote.Download(ctx, c, remotePath, dir, x.progress("downloading "+path.Base(remotePath)))
+	if err != nil {
+		return x.result(err)
+	}
+	x.emit(Event{ServerID: x.s.ID, Kind: EvDownloaded, Text: local})
+	x.note(EvNote, "downloaded to "+local)
+	return remote.Result{Duration: x.now().Sub(x.start)}
 }

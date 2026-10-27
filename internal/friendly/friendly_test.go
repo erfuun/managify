@@ -44,6 +44,7 @@ func TestTextAndShort(t *testing.T) {
 			"Host key for web-1 changed! Connection blocked. If this is expected, remove the old entry for [203.0.113.10]:2222 from " + kh + ".", "HOST KEY CHANGED"},
 		{"rejected", sshx.ErrHostKeyRejected, web1, "Host key not trusted. Connection cancelled.", "not trusted"},
 		{"cancelled", sshx.ErrPromptCancelled, web1, "Cancelled.", "cancelled"},
+		{"transfer cancelled", context.Canceled, web1, "Cancelled.", "cancelled"},
 		{"deadline", context.DeadlineExceeded, web1, "web-1 did not answer in time.", "timeout"},
 		{"sudo rejected", remote.ErrSudoRejected, web1, "sudo password rejected. Press e to update it.", "sudo failed"},
 		{"sudo needs password", remote.ErrSudoPasswordRequired, web1, "sudo needs a password on this server. Press e and set a sudo password.", "sudo failed"},

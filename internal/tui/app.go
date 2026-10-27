@@ -36,6 +36,8 @@ const (
 	screenForm
 	screenCmdInput
 	screenRun
+	screenUpload
+	screenDownload
 )
 
 type Model struct {
@@ -52,6 +54,10 @@ type Model struct {
 	form     formModel
 	cmdInput cmdInputModel
 	run      *runModel // the latest run; kept after leaving its screen
+	upload   uploadModel
+	download downloadModel
+
+	lastLocalDir string // where the picker last picked a file, this session
 
 	// ctx ends when the app quits, stopping probes and the prompt reader.
 	ctx    context.Context
@@ -129,6 +135,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateCmdInput(msg)
 	case screenRun:
 		return m.updateRun(msg)
+	case screenUpload:
+		return m.updateUpload(msg)
+	case screenDownload:
+		return m.updateDownload(msg)
 	}
 	return m, nil
 }
@@ -165,6 +175,10 @@ func (m Model) view() string {
 		return top + m.viewCmdInput()
 	case screenRun:
 		return top + m.viewRun()
+	case screenUpload:
+		return top + m.viewUpload()
+	case screenDownload:
+		return top + m.viewDownload()
 	}
 	return top
 }
@@ -200,6 +214,13 @@ func (m Model) viewWidth() int {
 		return 80
 	}
 	return m.width
+}
+
+func (m Model) viewHeight() int {
+	if m.height <= 0 {
+		return 24
+	}
+	return m.height
 }
 
 func clamp(v, lo, hi int) int {
