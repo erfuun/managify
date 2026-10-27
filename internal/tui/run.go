@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/job"
 	"github.com/erfuun/managify/internal/remote"
+	"github.com/erfuun/managify/internal/sshx"
 )
 
 const (
@@ -141,10 +143,14 @@ func (m Model) applyRunBatch(msg runBatchMsg) (Model, tea.Cmd) {
 			}
 			// The run is the explicit retry: its outcome decides whether
 			// background probes may ask about this server again.
+			// A cancelled prompt may be sudo's, after a good connect, so it
+			// leaves the mark as it was; the other errors come only from connecting.
 			if _, ok := m.d.Inv.Get(ev.ServerID); ok && m.ctx.Err() == nil {
-				if needsUser(ev.Result.Err) {
+				switch {
+				case errors.Is(ev.Result.Err, sshx.ErrPromptCancelled):
+				case needsUser(ev.Result.Err):
 					m.needsAction[ev.ServerID] = true
-				} else {
+				default:
 					delete(m.needsAction, ev.ServerID)
 					if !m.probing[ev.ServerID] {
 						probes = append(probes, m.probe(p.server))

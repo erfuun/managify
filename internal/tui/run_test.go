@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/remote"
 	"github.com/erfuun/managify/internal/sshtest"
 	"github.com/erfuun/managify/internal/testkit"
@@ -224,7 +225,7 @@ func TestRunFloodDoesNotStall(t *testing.T) {
 func TestRunCancelledPromptNotRepeatedByProbe(t *testing.T) {
 	d, env := liveDeps(t, 50*time.Millisecond)
 	srv := testkit.Start(t, sshtest.Options{Exec: runExec(echoExec)})
-	addLive(t, d, env, srv, "s-1", trusted)
+	s := addLive(t, d, env, srv, "s-1", trusted)
 	tm := start(t, d)
 	waitFor(t, tm, "Password for")
 	press(tm, "esc")
@@ -238,8 +239,10 @@ func TestRunCancelledPromptNotRepeatedByProbe(t *testing.T) {
 	if out := collect(tm, 300*time.Millisecond); bytes.Contains(out, []byte("Password for")) {
 		t.Fatalf("background probe asked again:\n%s", out)
 	}
-	press(tm, "esc", "q")
-	final(t, tm)
+	tm.Send(tea.QuitMsg{})
+	if m := final(t, tm); m.prompt != nil || !m.needsAction[s.ID] {
+		t.Fatalf("after cancelled run: prompt open=%v marked=%v", m.prompt != nil, m.needsAction[s.ID])
+	}
 }
 
 func TestPaneScrolling(t *testing.T) {
@@ -303,5 +306,31 @@ func TestViewNeverTallerThanTerminal(t *testing.T) {
 	}
 	if lines := strings.Count(m.View(), "\n") + 1; lines > 5 {
 		t.Fatalf("view has %d lines for a 5-line terminal", lines)
+	}
+}
+
+// Cancelling a sudo prompt happens after a good connect, so background
+// status refresh must keep running for that server.
+func TestRunSudoCancelKeepsStatusRefresh(t *testing.T) {
+	d, env := liveDeps(t, 0)
+	signer, keyPath := sshtest.ClientKey(t)
+	srv := sshtest.Start(t, sshtest.Options{AuthorizedKey: signer.PublicKey(), Exec: runExec(echoExec)})
+	env.Trust(t, srv)
+	s, err := d.Inv.Add(inventory.Server{Name: "s-1", Host: srv.Host, Port: srv.Port, User: "root",
+		Auth: inventory.AuthKey, KeyPath: keyPath, SudoPassword: inventory.SudoAsk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := start(t, d)
+	waitFor(t, tm, "● up")
+	press(tm, "r", "ctrl+o")
+	typeText(tm, "whoami")
+	press(tm, "enter")
+	waitFor(t, tm, "sudo password for root@")
+	press(tm, "esc")
+	waitFor(t, tm, "s-1 ✗ Cancelled.")
+	tm.Send(tea.QuitMsg{})
+	if m := final(t, tm); m.needsAction[s.ID] {
+		t.Fatal("sudo cancel marked the server; probes would skip it")
 	}
 }
