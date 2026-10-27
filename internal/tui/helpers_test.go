@@ -99,15 +99,6 @@ func press(tm *teatest.TestModel, keys ...string) {
 	}
 }
 
-// keyBackspaces is a batch of n backspaces sent as one message sequence.
-func keyBackspaces(n int) tea.Msg {
-	cmds := make([]tea.Cmd, n)
-	for i := range cmds {
-		cmds[i] = func() tea.Msg { return tea.KeyMsg{Type: tea.KeyBackspace} }
-	}
-	return tea.Sequence(cmds...)()
-}
-
 // typeText sends s as runes, one message per call like a paste.
 func typeText(tm *teatest.TestModel, s string) {
 	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})

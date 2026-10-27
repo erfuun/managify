@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/erfuun/managify/internal/inventory"
 	"github.com/erfuun/managify/internal/secrets"
 )
@@ -66,7 +68,7 @@ func TestBlankPortDefaultsTo22(t *testing.T) {
 	press(tm, "tab")
 	typeText(tm, "203.0.113.10")
 	press(tm, "tab")
-	tm.Send(keyBackspaces(2))
+	tm.Send(tea.KeyMsg{Type: tea.KeyCtrlU}) // clear "22", in order with the typing
 	press(tm, "tab")
 	typeText(tm, "root")
 	press(tm, "tab", "enter", "enter", "enter") // Auth → Key path → Sudo → submit
