@@ -13,9 +13,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
@@ -39,6 +41,10 @@ type Options struct {
 	// PublicKeyAlgorithms limits key-auth signature algorithms, e.g. to refuse
 	// SHA-1 "ssh-rsa" like OpenSSH 8.8+. nil keeps x/crypto's defaults.
 	PublicKeyAlgorithms []string
+	// Forward accepts direct-tcpip channels, like a jump host; DenyForward
+	// rejects them as "administratively prohibited", like AllowTcpForwarding no.
+	Forward     bool
+	DenyForward bool
 }
 
 type Server struct {
@@ -180,6 +186,10 @@ func (s *Server) handleConn(c net.Conn) {
 		go ssh.DiscardRequests(reqs)
 	}
 	for nc := range chans {
+		if nc.ChannelType() == "direct-tcpip" && (s.opts.Forward || s.opts.DenyForward) {
+			go s.handleForward(nc)
+			continue
+		}
 		if nc.ChannelType() != "session" {
 			nc.Reject(ssh.UnknownChannelType, "only sessions")
 			continue
@@ -190,6 +200,45 @@ func (s *Server) handleConn(c net.Conn) {
 		}
 		go s.handleSession(ch, chReqs)
 	}
+}
+
+// handleForward dials the address in a direct-tcpip request (RFC 4254 7.2)
+// and copies both ways until either side closes.
+func (s *Server) handleForward(nc ssh.NewChannel) {
+	if s.opts.DenyForward {
+		nc.Reject(ssh.Prohibited, "administratively prohibited")
+		return
+	}
+	var req struct {
+		Host     string
+		Port     uint32
+		OrigHost string
+		OrigPort uint32
+	}
+	if err := ssh.Unmarshal(nc.ExtraData(), &req); err != nil {
+		nc.Reject(ssh.ConnectionFailed, "bad request")
+		return
+	}
+	d := net.Dialer{Timeout: 5 * time.Second}
+	target, err := d.DialContext(s.ctx, "tcp", net.JoinHostPort(req.Host, strconv.Itoa(int(req.Port))))
+	if err != nil {
+		nc.Reject(ssh.ConnectionFailed, err.Error())
+		return
+	}
+	ch, reqs, err := nc.Accept()
+	if err != nil {
+		target.Close()
+		return
+	}
+	go ssh.DiscardRequests(reqs)
+	stop := context.AfterFunc(s.ctx, func() { ch.Close(); target.Close() })
+	defer stop()
+	done := make(chan struct{}, 2)
+	go func() { io.Copy(target, ch); done <- struct{}{} }()
+	go func() { io.Copy(ch, target); done <- struct{}{} }()
+	<-done
+	ch.Close()
+	target.Close()
 }
 
 func (s *Server) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
