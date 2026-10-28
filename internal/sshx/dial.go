@@ -87,7 +87,7 @@ func (d *Dialer) Dial(ctx context.Context, s inventory.Server) (Client, error) {
 		raw.Close()
 		return nil, d.handshakeError(ctx, s, st, err)
 	}
-	raw.SetDeadline(time.Time{})
+	pc.disarm()
 	return conn{ssh.NewClient(sc, chans, reqs)}, nil
 }
 
@@ -113,18 +113,24 @@ func (d *Dialer) handshakeError(ctx context.Context, s inventory.Server, st *dia
 
 // pausableConn holds the handshake deadline, lifted while a prompt is open so
 // a person reading a fingerprint or typing a password is never timed out.
+// A connection that refuses deadlines, such as a tunnel through a jump
+// server, gets a timer that closes it instead.
 type pausableConn struct {
 	net.Conn
 	timeout time.Duration
 	mu      sync.Mutex
 	paused  int
+	probed  bool // SetDeadline tried once
+	timed   bool // deadlines unsupported: timer is used
+	timer   *time.Timer
+	off     bool // handshake over
 }
 
 func (c *pausableConn) pause() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.paused++
-	c.Conn.SetDeadline(time.Time{})
+	c.stop()
 }
 
 func (c *pausableConn) resume() {
@@ -133,9 +139,43 @@ func (c *pausableConn) resume() {
 	if c.paused > 0 {
 		c.paused--
 	}
-	if c.paused == 0 {
-		c.Conn.SetDeadline(time.Now().Add(c.timeout))
+	if c.paused > 0 || c.off {
+		return
 	}
+	if !c.probed {
+		c.probed = true
+		c.timed = c.Conn.SetDeadline(time.Now().Add(c.timeout)) != nil
+		if !c.timed {
+			return
+		}
+	}
+	if !c.timed {
+		c.Conn.SetDeadline(time.Now().Add(c.timeout))
+		return
+	}
+	if c.timer == nil {
+		c.timer = time.AfterFunc(c.timeout, func() { c.Conn.Close() })
+	} else {
+		c.timer.Reset(c.timeout)
+	}
+}
+
+// disarm ends all timing once the handshake is done.
+func (c *pausableConn) disarm() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.off = true
+	c.stop()
+}
+
+func (c *pausableConn) stop() {
+	if c.timed {
+		if c.timer != nil {
+			c.timer.Stop()
+		}
+		return
+	}
+	c.Conn.SetDeadline(time.Time{})
 }
 
 type pausingPrompter struct {
