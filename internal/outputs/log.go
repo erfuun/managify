@@ -26,6 +26,7 @@ type Header struct {
 	Sudo     bool
 	Upload   string // "local -> remote"
 	Download string
+	Via      string // jump server name; "" when dialed directly
 }
 
 type Log struct {
@@ -63,7 +64,11 @@ func Begin(dataDir string, s inventory.Server, h Header, start time.Time) (*Log,
 	}
 	l := &Log{f: f, path: path}
 	var b strings.Builder
-	fmt.Fprintf(&b, "# server: %s (%s@%s)\n", s.Name, s.User, s.Addr())
+	via := ""
+	if h.Via != "" {
+		via = " via " + h.Via
+	}
+	fmt.Fprintf(&b, "# server: %s (%s@%s%s)\n", s.Name, s.User, s.Addr(), via)
 	b.WriteString(comment("command: " + h.Command))
 	if h.Sudo {
 		b.WriteString("# sudo: yes\n")

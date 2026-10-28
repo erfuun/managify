@@ -115,7 +115,7 @@ func (m Model) viewPrompt() string {
 	switch req.Kind {
 	case sshx.PromptHostKey:
 		lines = []string{
-			fmt.Sprintf("New server %s (%s)", s.Name, s.Addr()),
+			fmt.Sprintf("New server %s (%s%s)", s.Name, s.Addr(), m.via(s)),
 			"Key fingerprint: " + req.Detail,
 			"Type yes to trust and remember this key: " + m.prompt.input.View(),
 		}

@@ -65,7 +65,7 @@ func (m Model) startRun(spec job.Spec, targets []inventory.Server) (Model, tea.C
 	ctx, cancel := context.WithCancel(m.ctx)
 	r := &runModel{spec: spec, cancel: cancel, events: make(chan job.Event, 256),
 		byID: map[string]*pane{}, running: len(targets)}
-	jd := job.Deps{Pool: m.d.Pool, Creds: m.d.Creds, DataDir: m.d.DataDir, Now: m.d.Now}
+	jd := job.Deps{Pool: m.d.Pool, Creds: m.d.Creds, DataDir: m.d.DataDir, Now: m.d.Now, JumpName: m.d.Inv.JumpName}
 	app := m.ctx
 	var wg sync.WaitGroup
 	for _, s := range targets {
