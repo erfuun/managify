@@ -61,12 +61,16 @@ type Server struct {
 	cancel context.CancelFunc
 	fs     sftp.Handlers
 
-	mu      sync.Mutex
-	live    map[net.Conn]struct{}
-	conns   int
-	signals []string
-	ptyTerm string
-	sizes   [][2]int
+	mu    sync.Mutex
+	live  map[net.Conn]struct{}
+	conns int
+	// handshaking counts server-side handshakes not yet finished. A client's
+	// handshake can return a moment before the server's, so Conns waits for
+	// these to settle.
+	handshaking int
+	signals     []string
+	ptyTerm     string
+	sizes       [][2]int
 }
 
 // Start listens on 127.0.0.1 (never all interfaces, so no firewall prompts)
@@ -162,6 +166,7 @@ func (s *Server) acceptLoop() {
 func (s *Server) handleConn(c net.Conn) {
 	s.mu.Lock()
 	s.live[c] = struct{}{}
+	s.handshaking++
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -170,13 +175,16 @@ func (s *Server) handleConn(c net.Conn) {
 		c.Close()
 	}()
 	sc, chans, reqs, err := ssh.NewServerConn(c, s.cfg)
+	s.mu.Lock()
+	s.handshaking--
+	if err == nil {
+		s.conns++
+	}
+	s.mu.Unlock()
 	if err != nil {
 		return
 	}
 	defer sc.Close()
-	s.mu.Lock()
-	s.conns++
-	s.mu.Unlock()
 	if s.opts.IgnoreGlobalRequests {
 		go func() {
 			for range reqs {
@@ -329,11 +337,20 @@ func exit(ch ssh.Channel, code int) {
 	ch.Close()
 }
 
-// Conns counts completed handshakes.
+// Conns counts completed handshakes. It first waits, up to 2s, for
+// handshakes still finishing on the server side, so a client that has just
+// connected is always counted.
 func (s *Server) Conns() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.conns
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		s.mu.Lock()
+		n, busy := s.conns, s.handshaking > 0
+		s.mu.Unlock()
+		if !busy || time.Now().After(deadline) {
+			return n
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // Signals lists received signal names, e.g. "INT".

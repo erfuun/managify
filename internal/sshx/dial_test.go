@@ -386,3 +386,13 @@ func TestPausedTimerDoesNotFire(t *testing.T) {
 		t.Fatal("resumed timer never closed the conn")
 	}
 }
+
+// Decrypting a key is local CPU work (bcrypt KDF, about 95ms here), so it
+// must not count against the server's handshake timeout.
+func TestDialKeyDecryptNotTimedOut(t *testing.T) {
+	signer, path := sshtest.EncryptedClientKey(t, "phrase")
+	srv := sshtest.Start(t, sshtest.Options{AuthorizedKey: signer.PublicKey()})
+	d := seededDialer(t, srv, newCreds(secrets.NewMem(), &slowPrompter{answer: "phrase"}))
+	d.Timeout = 75 * time.Millisecond
+	mustDial(t, d, keyServer(srv, path))
+}
