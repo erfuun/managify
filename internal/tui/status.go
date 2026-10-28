@@ -104,6 +104,21 @@ func needsUser(err error) bool {
 		errors.As(err, &auth) || errors.As(err, &mismatch)
 }
 
+// retryDependants retries the servers behind a jump server that just
+// answered: their marks came from the jump, which works again.
+func (m Model) retryDependants(msg statusMsg) tea.Cmd {
+	if msg.Err != nil || msg.Gen != m.probeGen[msg.ID] || m.ctx.Err() != nil {
+		return nil
+	}
+	var cmds []tea.Cmd
+	for _, s := range m.d.Inv.Servers {
+		if s.Jump == msg.ID && m.needsAction[s.ID] {
+			cmds = append(cmds, m.retry(s))
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
 // retry clears s's needs-action mark and probes it now.
 func (m Model) retry(s inventory.Server) tea.Cmd {
 	delete(m.needsAction, s.ID)

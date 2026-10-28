@@ -6,7 +6,10 @@ import (
 	"testing"
 
 	"github.com/erfuun/managify/internal/inventory"
+	"github.com/erfuun/managify/internal/secrets"
+	"github.com/erfuun/managify/internal/sshtest"
 	"github.com/erfuun/managify/internal/sshx"
+	"github.com/erfuun/managify/internal/testkit"
 )
 
 // jumpDeps holds web-1 and db-1, which jumps through web-1.
@@ -114,4 +117,25 @@ func TestHostKeyPromptShowsVia(t *testing.T) {
 	if want := "New server db-1 (203.0.113.20:22 via web-1)"; !strings.Contains(m.viewPrompt(), want) {
 		t.Fatalf("prompt lacks %q:\n%s", want, m.viewPrompt())
 	}
+}
+
+// Fixing the jump server retries the servers behind it, which background
+// probes otherwise leave alone while they need the user.
+func TestFixingJumpRetriesDependants(t *testing.T) {
+	d, env := liveDeps(t, 0)
+	env.Dialer.Lookup = d.Inv.Get
+	web := addLive(t, d, env, testkit.Start(t, sshtest.Options{Forward: true, Exec: probeExec}), "web-1", savedPassword|trusted)
+	db := addLive(t, d, env, probeServer(t), "db-1", savedPassword|trusted)
+	db.Jump = web.ID
+	if err := d.Inv.Update(db); err != nil {
+		t.Fatal(err)
+	}
+	env.Store.Set(secrets.LoginAccount(web.ID), "wrong")
+	tm := start(t, d)
+	waitForRe(t, tm, `db-1\s+\S+ via web-1\s+○ down \(auth failed\)`)
+	env.Store.Set(secrets.LoginAccount(web.ID), testkit.Password)
+	tm.Send(serverSavedMsg{Server: web})
+	waitForRe(t, tm, `db-1\s+\S+ via web-1\s+● up`)
+	press(tm, "q")
+	final(t, tm)
 }
