@@ -26,6 +26,16 @@ Setup: a Linux server you can reach over SSH, with a key-auth user and a passwor
 - [ ] **Tabs and escape codes in output.** Run `cat /etc/fstab` (or another tab-indented file) and `ls --color=always`. Expected: the columns line up, colour codes don't appear as text, and the run header stays at the top.
 - [ ] **ctrl+c cancel message.** Run `sleep 60`, then press `ctrl+c`. Expected: `✗ cancelled locally; process may still be running on <name>`. `esc` returns to the list.
 
+## Jump hosts
+
+Setup: a second Linux server reachable only from the first one, or any server
+you add a second time as if it were behind the first.
+
+- [ ] **Run through a jump.** Add `db-1` with **Jump via** set to the first server and **Host** set to the address the first server uses for it. Confirm both fingerprints when asked. Expected: the row reads `user@host via <jump>` and shows `● up`. `r` and `hostname` print the second server's name.
+- [ ] **Upload and shell through a jump.** On `db-1`, upload a file with `u`, then open the shell with `enter`. Expected: the upload completes and the shell prompt is the second server's.
+- [ ] **Forwarding off.** Set `AllowTcpForwarding no` on the jump server and restart sshd, then press `R`. Expected: `<jump> doesn't allow TCP forwarding (AllowTcpForwarding in its sshd_config).` Set it back afterwards.
+- [ ] **Delete blocked.** Select the jump server and press `d`, then `y`. Expected: `<jump> is the jump host for db-1. Change those first.` Nothing is deleted.
+
 ## Shell
 
 - [ ] **Shell and htop resize.** Press `enter` on a server, check that `stty size` matches the window, and run `htop`. Resize the Windows Terminal window. Expected: htop redraws to the new size. Arrow keys and tab completion work. `ctrl+c` stops only the remote command.

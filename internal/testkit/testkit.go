@@ -35,6 +35,7 @@ type Env struct {
 	Creds      *sshx.Creds
 	Dialer     *sshx.Dialer
 	Pool       *sshx.Pool
+	Inv        *inventory.Inventory // jump servers are looked up here
 }
 
 func NewEnv(t testing.TB) *Env {
@@ -52,6 +53,12 @@ func NewEnv(t testing.TB) *Env {
 		Agent:      func() (agent.Agent, error) { return nil, errors.New("no agent") },
 	}
 	e.Pool = sshx.NewPool(e.Dialer)
+	inv, err := inventory.Load(filepath.Join(t.TempDir(), "servers.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Inv = inv
+	e.Dialer.Lookup, e.Dialer.Jump = inv.Get, e.Pool.Get
 	t.Cleanup(e.Pool.Close)
 	return e
 }

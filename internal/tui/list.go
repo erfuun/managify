@@ -118,7 +118,7 @@ func (m Model) viewList() string {
 	nameW, addrW := 8, 16
 	for _, s := range servers {
 		nameW = max(nameW, lipgloss.Width(s.Name))
-		addrW = max(addrW, lipgloss.Width(address(s)))
+		addrW = max(addrW, lipgloss.Width(m.address(s)))
 	}
 	cursor := clamp(m.cursor, 0, max(len(servers)-1, 0))
 	for i, s := range servers {
@@ -127,7 +127,7 @@ func (m Model) viewList() string {
 			check = "[x]"
 		}
 		// The cursor row is reversed as a whole; inner colors would end it early.
-		row := fmt.Sprintf("%s %-*s %-*s  %s", check, nameW, s.Name, addrW, address(s), m.statusCell(s, i != cursor))
+		row := fmt.Sprintf("%s %-*s %-*s  %s", check, nameW, s.Name, addrW, m.address(s), m.statusCell(s, i != cursor))
 		if i == cursor {
 			row = cursorStyle.Render(row)
 		}
@@ -146,12 +146,20 @@ func (m Model) viewList() string {
 	return b.String()
 }
 
-func address(s inventory.Server) string {
+func (m Model) address(s inventory.Server) string {
 	a := s.User + "@" + s.Host
 	if s.Port != 22 && s.Port != 0 {
 		a += ":" + strconv.Itoa(s.Port)
 	}
-	return a
+	return a + m.via(s)
+}
+
+// via is " via <jump server>" for a server reached through one, else "".
+func (m Model) via(s inventory.Server) string {
+	if name := m.d.Inv.JumpName(s); name != "" {
+		return " via " + name
+	}
+	return ""
 }
 
 func (m Model) viewHelp() string {

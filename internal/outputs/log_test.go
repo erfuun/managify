@@ -170,3 +170,15 @@ func TestLogMultilineCommand(t *testing.T) {
 		t.Fatalf("log =\n%s", got)
 	}
 }
+
+func TestLogHeaderVia(t *testing.T) {
+	db := inventory.Server{Name: "db-1", Host: "10.0.0.12", Port: 22, User: "postgres"}
+	l, err := Begin(t.TempDir(), db, Header{Command: "true", Via: "web-1"}, started)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.Finish(remote.Result{})
+	if got := readLog(t, l); !strings.HasPrefix(got, "# server: db-1 (postgres@10.0.0.12:22 via web-1)\n") {
+		t.Fatalf("log =\n%s", got)
+	}
+}

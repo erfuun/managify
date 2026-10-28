@@ -1,0 +1,112 @@
+# Managify v1: decisions and deferred minors
+
+Copied from the execution ledger (`.superpowers/sdd/2026-10-27-managify-v1/progress.md`, git-ignored) after the final review. Each ruling reads: what was decided, why, and what it costs if wrong.
+
+## Rulings, in the order they were made
+
+- Task 1: Ruling: added .gitattributes (`* text=auto eol=lf`) — core.autocrlf would make gofmt flag every file after checkout — cost if wrong: one extra file.
+- Global: Ruling: every task adding deps also stages go.mod/go.sum; deps fetched at the Tech Stack pinned versions (teatest at its pinned pseudo-version) — plan's git add paths omit them; a clean checkout must build — cost if wrong: none.
+- Global: Ruling: task-done runs `go vet ./... && go test ./...` (whole suite) per Global Constraints.
+- Task 2: Ruling: duplicate names are case-insensitive (EqualFold) — names become output/download dir names and Windows paths ignore case — cost if wrong: user cannot have "Web-1" and "web-1".
+- Task 2: Ruling: Name/Host/User are whitespace-trimmed before validation — stray spaces would break SSH or dir names — cost if wrong: none.
+- Task 4: Ruling: manual run deferred to the Milestone 1 check — no TTY in this shell — cost if wrong: a Windows-console rendering/input bug surfaces one task later.
+- Task 5: Ruling: e/d act on the cursor row, not the selection — the delete prompt names one server — cost if wrong: none.
+- Task 5: Ruling: blank password on edit MOVES the existing secret between keychain and session when Keychain/Sudo mode changes (placeSecret) — brief: "empty input keeps the existing secret" — cost if wrong: none; covered by TestBlankPasswordMovesSecret.
+- Task 5: Ruling: blank Port → default 22 (spec: port default 22); key→password edit defaults Save-to-keychain on — cost if wrong: none.
+- Task 7: Ruling: Pending.Done() added (interface addition) so the TUI can drop a prompt nobody waits for; nil for Background ctx — cost if wrong: none.
+- Task 7: Ruling: queue lock is a cancellable chan semaphore, not sync.Mutex; same one-at-a-time semantics — cost if wrong: none.
+- Task 7: Ruling: per-account lookup lock; concurrent lookups for one account prompt once (TestPassphraseConcurrentPromptsOnce) — spec: passphrase cached for the session — cost if wrong: none.
+- Task 7: Ruling: non-NotFound keychain errors fall through to session/prompt; failed Set keeps the session copy — cost if wrong: a broken keychain silently degrades to ask-each-session.
+- Task 8: Ruling: @revoked keys are treated as a mismatch (blocked, no prompt) — cost if wrong: none.
+- Task 8: Ruling: known_hosts re-read on every check so a key just confirmed by another dial is seen; parse error at construction names the file, never rewrites — cost if wrong: none.
+- Task 9: Ruling: added KnownHostAlgorithms (hostkey.go); Dialer sets HostKeyAlgorithms from known_hosts — without it a host known by a different key type reads as "changed" (TestDialKnownHostOtherKeyType RED→GREEN) — cost if wrong: a server with none of its known key types fails with a handshake error instead of a mismatch.
+- Task 9: Ruling: sshtest Options.ECDSA, Server.ECDSASigner, KnownHostsLineFor added (test-only interface additions).
+- Task 9: Ruling: cancelled ctx → ErrPromptCancelled; DNS failure → UnreachableError{Reason:"unknown host"} — cost if wrong: wording only.
+- Task 9: Ruling: DefaultAgent returns an agent that is also io.Closer so Dial closes the pipe/socket after the handshake — cost if wrong: none.
+- Global: Ruling: module renamed to github.com/erfuun/managify after the user created the repo (spec: "rename when pushed to GitHub"); later imports use github.com/erfuun/managify/… — cost if wrong: one sed. Adding origin was blocked by permissions → user adds it; nothing pushed.
+- Task 10: Ruling: sshtest Options.IgnoreGlobalRequests added (test-only) to simulate a half-open connection.
+- Task 10: Ruling: keepalive waits one interval for a reply; no reply → evict + Close (TestPoolEvictsUnresponsiveConnection) — cost if wrong: a very slow but alive link gets redialed.
+- Task 10: Ruling: entries also evicted when the client Wait() returns, so a dropped connection is replaced at once.
+- Task 10: Ruling: Get returns ErrPromptCancelled when ctx ends while waiting on another dial for the same server.
+- Task 11: Ruling: context.DeadlineExceeded → "<name> did not answer in time." / "timeout" — probe/command timeouts otherwise read as raw Go errors — cost if wrong: wording.
+- Task 12: Ruling: added internal/testkit (Env, Start, Trust, PasswordServer, Dial), a test-only helper outside the plan for remote/job/tui tests.
+- Task 12: Ruling: ErrProbeOutput sentinel; ParseProbe error wraps it with an output excerpt (brief text is a prefix; errors.Is holds); Task 13 renders it as "● up (no stats)".
+- Task 12: Ruling: Probe parses stdout even on ExitError, returns ctx.Err() on timeout, other session errors raw; unexported openSession reused by Task 14.
+- Task 13: Ruling: sshx/auth.go changed outside the brief (keyboard-interactive re-asked after a cancelled password) — TestDialCancelledPasswordAsksOnce RED→GREEN — cost if wrong: none, a cancel should end the dial.
+- Task 13: Ruling: staleness uses a per-server probe generation that only grows (not ConnKey); deletes guarded by Inv.Get — TestProbeBeforeSaveIsSuperseded RED→GREEN — cost if wrong: a stale status on an edited server.
+- Task 13: Ruling: nil Deps.Pool means no probes and "? unknown", keeping older TUI tests offline — cost if wrong: none in production (main always sets Pool).
+- Task 13: Ruling: R clears every needsAction mark and probes servers not already probing, so every locked server may prompt again, one at a time — the plan allows it — cost if wrong: a burst of prompts after R.
+- Task 13: Ruling: row shows "● up   (no stats)" (three spaces, matching the spec row layout), superseding Task 12 wording.
+- Task 13: Ruling: overlay esc and ctrl+c decline the prompt and never quit; the overlay takes every key before screen routing (TestPromptSwallowsListKeys).
+- Task 14: Ruling: ExitMissingError falls through to ExitCode -1 with Err (same as any other Wait error) — sshtest always sends exit-status, so no test exercises it — cost if wrong: a wrong exit label on servers that drop the status.
+- Task 14: Ruling: on cancel, Run waits for both readers after Close, so sink is never called after Run returns — cost if wrong: see deferred minor.
+- Task 15: Ruling: Short "sudo failed" applies to all three sudo errors (brief parenthetical read as covering the new rows) — cost if wrong: two status cells say "sudo failed" instead of "error".
+- Task 15: Ruling: stderr scanned while streaming (first match wins); the match is applied only on a non-zero *ssh.ExitError; matched lines still reach sink (TestSudoErrorOnlyOnFailure).
+- Task 15: Ruling: added a sudo -n path test (mode none writes nothing on stdin), mutation-checked — beyond the brief.
+- Task 16: Ruling: SafeName suffixes the base of a reserved name that has an extension (nul.txt → nul_.txt), per the Windows rule; round-trip test guards it — beyond the brief.
+- Task 16: Ruling: header and Note continuation lines get "#   " so every non-output line starts with "#" — beyond the brief — cost if wrong: cosmetic.
+- Task 16: Ruling: footer precedence is Cancelled, then Err, then exit; a sudo error's exit code is not shown in the footer.
+- Task 16: Ruling: LF line endings on every OS; Log has a mutex so Note may come from outside the sink goroutine.
+- Task 17: Ruling: for password-auth servers ForgetSudo does nothing (sudo uses the login account, which just authenticated) — cost if wrong: a password-auth user whose sudo password differs from login cannot fix it in v1.
+- Task 17: Ruling: failures before outputs.Begin (dial, cancelled sudo prompt) emit EvDone with LogPath "" and write no log.
+- Task 17: Ruling: a cancelled Pool.Get or sudo prompt is Err=ErrPromptCancelled with Result.Cancelled false; Cancelled means a command was interrupted.
+- Task 17: Ruling: Evict on *AuthError after a failed Pool.Get is a no-op (failed dials are never pooled); kept to match the brief.
+- Task 17: Ruling: Begin or log-write failure emits EvWarn once and keeps running (TestExecuteLogFailureWarnsAndRuns) — beyond the brief.
+- Task 18: Ruling: r does not clear needsAction up front; the run is the retry — EvDone sets the mark on needsUser errors and otherwise clears it and re-probes (TestRunCancelledPromptNotRepeatedByProbe RED→GREEN). Supersedes the Task 13 carry-forward wording.
+- Task 18: Ruling: View clips frames to the terminal height from the bottom, and layoutRun leaves room for an open prompt — Bubble Tea drops lines from the top of a too-tall frame, which hid prompts on the run screen (TestPromptVisibleOnRunScreen, TestViewNeverTallerThanTerminal RED→GREEN) — beyond the brief, touches app.go and prompt.go.
+- Task 18: Ruling: r is a no-op without targets or with a nil Pool; q does nothing in the run view; esc after completion cancels the run ctx and keeps m.run.
+- Task 18: Ruling: emit blocks on a 256-slot channel as back-pressure and drops events only when the app quits; pane lines trimmed in steps of 1000 above 5000.
+- Task 18: Ruling: with 3 or fewer panes, tab/shift+tab move a "›" focus marker for pgup/pgdn; extra tests: EmptyCommandIgnored, FailureTitles, PaneScrolling (mutation-checked).
+- Task 19: Ruling: TestShellReleasesStdin is !windows; it type-checks under GOOS=linux go vet but has never run here — cost if wrong: a leftover reader steals the first key on Unix.
+- Task 19: Ruling: prepareOutput added in resize_* files to enable VT processing on Windows stdout — beyond the brief.
+- Task 19: Ruling: shell test uses separate stdout/stderr buffers (two copiers into one bytes.Buffer race in ReadFrom) — test artifact, not a product bug.
+- Task 19: Ruling: go.mod gains cancelreader, x/sys, x/term as direct deps; cancelreader is closed on return (restores the Windows console mode) and the wait for the stdin copier is bounded to 1 s.
+- Task 19: Ruling: enter is a no-op with nil Pool; a connect error marks needsAction via needsUser, and a successful connect clears the mark and footer.
+- Task 20: Ruling: SafeName moved to appdir.SafeName(name, fallback) and outputs.SafeName delegates — avoids a remote→outputs import cycle so Download can sanitize remote names — touches appdir and outputs, beyond the brief.
+- Task 20: Ruling: Download writes <name>.part and renames on success; remote base names are sanitized (a:b.log → a_b.log); directories are refused with a clear message.
+- Task 20: Ruling: an empty remote path means the home dir; an existing directory without a trailing / is uploaded into, like scp (TestUploadIntoDirWithoutSlash RED→GREEN).
+- Task 20: Ruling: Upload truncates in place, keeping an existing file mode such as +x — cost if wrong: a dropped connection leaves a half-written remote file.
+- Task 21: Ruling: the log begins before the upload and its header shows the remote path as typed, not resolved — the log must exist to record the upload; the "uploaded to" note gives the final path — cost if wrong: header text only
+- Task 21: Ruling: a transfer with no command logs "command: (none)" — keeps the header shape fixed — cost if wrong: header text only
+- Task 21: Ruling: EvProgress.Text carries the label ("uploading deploy.sh"), the TUI formats "label N%" — keeps formatting in the UI — cost if wrong: none outside tui
+- Task 21: Ruling: TestUploadRemembersRemoteDir uploads to /opt/ instead of the brief's /tmp/ — /tmp/ is also the default, so the brief's test could not tell remembering from defaulting — cost if wrong: none
+- Task 21: Ruling: extra tests beyond the brief (upload-only, upload failure, upload+run warning, esc cancels, download TUI, progress in place and across trim) and friendly maps context.Canceled to "Cancelled." — a cancelled transfer otherwise showed "context canceled" — cost if wrong: one friendly row
+- Task 21: Ruling: EvWarn lines use stderrStyle for every warning, per the brief, not only the CRLF one — one warning style — cost if wrong: colour only
+- Task 22: Ruling: Update/Delete of a missing name return "no snippet named X"; name, command and upload paths are trimmed; an upload with an empty local path is dropped; command is checked before duplicates; Load does not validate entries (as inventory) — brief left these open — cost if wrong: error text only
+- Task 23: Ruling: the snippet form saves on ctrl+s as well as enter on the last field; "an upload needs a local file" is checked in the TUI so a lone remote path is not silently dropped — friendlier than the store dropping it — cost if wrong: one key and one message
+- Task 23: Ruling: ctrl+s while a run is going shows "Wait for the run to finish, then ctrl+s."; on a download run it shows "A download can't be saved as a snippet."; an upload-only run opens the form with Command empty (store then says "command is required"); save-from-run returns to the run with "Saved snippet X" — Snippet has no download and needs a command — cost if wrong: hint text
+- Task 23: Ruling: a failed snippets.yaml write keeps the change in memory and shows the error, like the server form; enter with no servers shows "Add a server first."; a nil Deps.Snippets disables s and ctrl+s — mirrors existing patterns — cost if wrong: a stale in-memory snippet until restart
+- Task 23: Ruling: list.go (s key) and helpers_test.go (testDeps loads a temp snippets.yaml) changed outside the brief's file list — needed to reach and test the screen — cost if wrong: none
+- Task 23: Ruling: TestSaveRunAsSnippet types the name as keys "u","p" — one KeyRunes "up" matches textinput's PrevSuggestion binding; real typing sends separate keys — cost if wrong: none
+- Task 24: Ruling: Step 4 (walking docs/manual-test.md against a real Linux server) is deferred to the user; the boxes are left unticked and v1 is not done until every item passes — needs a real server and Windows Terminal, which this session does not have — cost if wrong: a release with untested real-server paths
+- Task 24: Ruling: README leads with go install ./cmd/managify (the remote @latest form is labelled for after publishing) and says 0600/0700 applies on Linux/macOS while Windows inherits profile ACLs — the repo is unpushed and Go file modes are mostly ignored on Windows — cost if wrong: doc text
+- Final: Ruling: a connection retired because its keepalive was slow (not failed) is not closed; it stays open until its own keepalive or Wait drops it, or the app quits — a slow answer may be an upload filling the send buffer, and closing would kill it — cost if wrong: one idle extra connection per such event
+- Final: Ruling: Pool.Get adds one keepalive round trip when the connection has been idle ≥5 s — the price of noticing a dead link before using it — cost if wrong: ~1 RTT on the first action after a pause
+- Final: Ruling: an encrypted legacy PEM key with no .pub beside it is still decrypted up front, before agent keys are tried — its public key is unknowable without the passphrase — cost if wrong: a passphrase prompt for users of old PEM keys with an agent
+- Final: Ruling: the host-key prompt accepts only yes&no (trimmed, any case) + enter; other text shows "Type yes or no." and keeps it open; esc&ctrl+c decline — matches OpenSSH — cost if wrong: one extra word to type
+- Final: Ruling: sshtest gained Options.PublicKeyAlgorithms (test-only) to refuse SHA-1 ssh-rsa like OpenSSH 8.8+ — needed to prove RSA keys sign with rsa-sha2 — cost if wrong: none
+- Final: Ruling: the Task 14 minor (a cancelled Run on a half-open link returns only once keepalive drops it, past the 2 s cancelGrace) stays deferred — Fix 3 makes a new half-open link rarer at start, and the pane already says the process may still be running — cost if wrong: up to ~30 s before a cancelled pane shows its final title
+- Final: Ruling: reviewer's Minor 1 (prompt answer saved to the keychain before the server accepts it) and Minor 2 (duplicate-name check on raw names, not SafeName) stay Minor — each has an on-screen recovery ("Password rejected. Press e to update it."; rename the server) and neither loses data or weakens security — cost if wrong: a mistyped saved password must be fixed with e
+- Final: Ruling: data races not checked under -race (no cgo&gcc on this machine, for implementer and reviewer alike); concurrency was reviewed by reading — cost if wrong: an unseen race; run go test -race .&... on a machine with cgo
+- Final: Ruling: Windows console raw mode, resize polling, VT output, the agent named pipe and Credential Manager were not judged by the reviewer — covered by docs&manual-test.md — cost if wrong: found during the manual pass
+- Final: Ruling: real sudo behaviour (requiretty, lecture, message wording across sudo versions) not judged — covered by the manual test — cost if wrong: a sudo error shown as raw text
+- Final: Ruling: known_hosts lines x&crypto cannot parse block every connection — reviewer found no realistic trigger — cost if wrong: user must fix known_hosts by hand
+- Final: Ruling: UTF-16 scripts look binary, so no CRLF warning — they fail on Linux regardless — cost if wrong: none beyond the remote error
+- Final: Ruling: v1 is not done until docs&manual-test.md passes on a real server (as Task 24 ruled) — does not change the merge verdict — cost if wrong: untested real-server paths
+
+## Deferred minors
+
+- Task 8: minor (deferred): two profiles for the same host:port each ask to confirm the same fingerprint at startup (no per-hostname lock).
+- Task 9: minor (deferred): keySigner treats every ParsePrivateKeyWithPassphrase error as a wrong passphrase (a corrupt key re-asks).
+- Task 9: minor (deferred): known_hosts reads do not hold knownHostsMu; a concurrent append could cause a spurious parse error at startup.
+- on a half-open connection a cancelled Run returns only once pool keepalive drops the transport (up to ~one keepalive interval past the 2 s grace). Fix would bound readers.Wait and drop late lines under the sink mutex.
+- a silently dead pooled connection fails the next job instead of redialing; fix would Evict and retry once when openSession fails with a non-ctx error. **Fixed in the final review** (Pool.Get checks idle connections).
+- the server list has no scrolling, so with more servers than terminal rows the bottom rows (and footer) are clipped.
+- SFTP copies one 32 KiB packet per round trip (no UseConcurrentWrites, wrapped reader hides Size()); large files over slow links will be slow.
+- prompt answers are saved to the keychain before the server accepts them, and an empty answer is cached for the session (sudo ask then stays on sudo -n); fix: store only after success, never cache ""
+- names like web:1 and web_1 both pass the duplicate check but share one SafeName folder, so same-named downloads overwrite; fix: compare SafeName with EqualFold
+- inventory Load does not normalize hand-edited files (missing port dials :0, missing id shares keychain&pool&status entries); fix: normalize and assign IDs on load
+- a failed servers.yaml save leaves the appended server in memory, so resubmitting says name already used; fix: roll back on Save failure
+- the list footer keeps a message for server A while the cursor is on B, hiding B's down reason
+- upload&snippet local paths do not expand ~; fix: appdir.ExpandHome in job
+- an agent with 6+ keys can exhaust MaxAuthTries before the key file is offered; fix: put the key file first when the agent lacks it

@@ -52,6 +52,9 @@ type Deps struct {
 	Creds   *sshx.Creds
 	DataDir string
 	Now     func() time.Time
+	// JumpName names the server's jump server for the log header; nil or ""
+	// leaves "via" out.
+	JumpName func(inventory.Server) string
 }
 
 // Execute runs spec on s: an optional upload, then an optional command, or a
@@ -134,6 +137,9 @@ func (x *execution) warn(text string) { x.emit(Event{ServerID: x.s.ID, Kind: EvW
 
 // begin opens the log. One that cannot be written must not stop the job.
 func (x *execution) begin(h outputs.Header) {
+	if x.d.JumpName != nil {
+		h.Via = x.d.JumpName(x.s)
+	}
 	log, err := outputs.Begin(x.d.DataDir, x.s, h, x.start)
 	if err != nil {
 		x.warn("Output is not being saved: could not create the log: " + err.Error())

@@ -11,6 +11,8 @@ import (
 	"github.com/erfuun/managify/internal/sshx"
 )
 
+var db1 = inventory.Server{ID: "9c1e22aa", Name: "db-1", Host: "10.0.0.12", Port: 22, User: "postgres", Auth: inventory.AuthKey, Jump: "7f3a9c21"}
+
 var web1 = inventory.Server{ID: "7f3a9c21", Name: "web-1", Host: "203.0.113.10", Port: 22, User: "root", Auth: inventory.AuthKey}
 
 func TestTextAndShort(t *testing.T) {
@@ -49,6 +51,16 @@ func TestTextAndShort(t *testing.T) {
 		{"sudo rejected", remote.ErrSudoRejected, web1, "sudo password rejected. Press e to update it.", "sudo failed"},
 		{"sudo needs password", remote.ErrSudoPasswordRequired, web1, "sudo needs a password on this server. Press e and set a sudo password.", "sudo failed"},
 		{"sudo needs tty", remote.ErrSudoNeedsTTY, web1, "This server requires a tty for sudo. Use the shell.", "sudo failed"},
+		{"jump auth", &sshx.JumpError{Jump: web1, Err: &sshx.AuthError{Server: web1, Method: inventory.AuthPassword}}, db1,
+			"Jump host web-1: Password rejected. Select web-1 and press e to update it.", "auth failed"},
+		{"jump unreachable", &sshx.JumpError{Jump: web1, Err: &sshx.UnreachableError{Addr: "203.0.113.10:22", Reason: "timeout"}}, db1,
+			"Jump host web-1: Can't reach 203.0.113.10:22 (timeout)", "timeout"},
+		{"forwarding denied", &sshx.JumpError{Jump: web1, Err: sshx.ErrForwardingDenied}, db1,
+			"web-1 doesn't allow TCP forwarding (AllowTcpForwarding in its sshd_config).", "unreachable"},
+		{"target behind jump", &sshx.UnreachableError{Addr: "10.0.0.12:22", Via: "web-1", Reason: "connection refused"}, db1,
+			"Can't reach 10.0.0.12:22 via web-1 (connection refused)", "refused"},
+		{"jump missing", &sshx.JumpError{Jump: web1, Err: errors.New("jump server not found")}, db1,
+			"Jump host web-1: jump server not found", "error"},
 		// Unknown errors keep their full (wrapped) message.
 		{"other", errors.New("something odd"), web1, "probe: something odd", "error"},
 	}

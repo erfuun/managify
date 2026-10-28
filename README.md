@@ -80,6 +80,27 @@ Managify never overwrites a config file it can't parse. It shows the file and li
 
   The password is sent only on sudo's standard input.
 
+## Jump hosts
+
+A server that you can reach only through another one, such as a database
+server that accepts SSH only from the web server, can jump through it, like
+`ssh -J`:
+
+1. Add the web server as usual.
+2. Add the database server. Set **Host** to its address as the web server sees
+   it, such as `10.0.0.12` or an internal name, and set **Jump via** to the web
+   server.
+
+Managify logs in to the web server with that server's own saved settings, then
+reaches the database server through it. The jump connection is shared with the
+web server's own runs, so you log in to it once.
+
+- There is one hop: a jump server can't jump through another server.
+- The jump server's sshd must allow TCP forwarding (`AllowTcpForwarding yes`,
+  the default).
+- A server that others jump through can't be deleted until they stop using it.
+- The list shows `user@host via <jump server>`.
+
 ## Security notes
 
 - Passwords and passphrases live only in the OS keychain or in memory. They never appear in the YAML files, logs or error messages.

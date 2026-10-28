@@ -32,10 +32,11 @@ const (
 	fSudoPw
 	fPassword
 	fSavePw
+	fJump
 	nFields
 )
 
-var fieldLabels = [nFields]string{"Name", "Host", "Port", "User", "Auth", "Key path", "Sudo password", "Sudo pw value", "Password", "Keychain"}
+var fieldLabels = [nFields]string{"Name", "Host", "Port", "User", "Auth", "Key path", "Sudo password", "Sudo pw value", "Password", "Keychain", "Jump via"}
 
 var sudoModes = []inventory.SudoMode{inventory.SudoNone, inventory.SudoSaved, inventory.SudoAsk}
 
@@ -46,12 +47,25 @@ type formModel struct {
 	auth     inventory.Auth
 	sudoMode inventory.SudoMode
 	savePw   bool
-	focus    int // index into visible()
-	err      string
+	// jumpIDs and jumpNames list the jump choices, "" and "none" first;
+	// jump indexes them.
+	jumpIDs   []string
+	jumpNames []string
+	jump      int
+	focus     int // index into visible()
+	err       string
 }
 
-func newForm(s *inventory.Server) formModel {
-	f := formModel{auth: inventory.AuthKey, sudoMode: inventory.SudoNone, savePw: true}
+func newForm(s *inventory.Server, jumps []inventory.Server) formModel {
+	f := formModel{auth: inventory.AuthKey, sudoMode: inventory.SudoNone, savePw: true,
+		jumpIDs: []string{""}, jumpNames: []string{"none"}}
+	for _, j := range jumps {
+		f.jumpIDs = append(f.jumpIDs, j.ID)
+		f.jumpNames = append(f.jumpNames, j.Name)
+		if s != nil && s.Jump == j.ID {
+			f.jump = len(f.jumpIDs) - 1
+		}
+	}
 	for _, id := range []field{fName, fHost, fPort, fUser, fKeyPath, fSudoPw, fPassword} {
 		ti := textinput.New()
 		ti.Prompt = ""
@@ -85,7 +99,12 @@ func newForm(s *inventory.Server) formModel {
 }
 
 func (f formModel) visible() []field {
-	v := []field{fName, fHost, fPort, fUser, fAuth}
+	v := []field{fName, fHost, fPort, fUser}
+	// Shown only when there is a server to jump through.
+	if len(f.jumpIDs) > 1 {
+		v = append(v, fJump)
+	}
+	v = append(v, fAuth)
 	if f.auth == inventory.AuthKey {
 		v = append(v, fKeyPath, fSudoMode)
 		if f.sudoMode == inventory.SudoSaved {
@@ -114,11 +133,15 @@ func (f *formModel) refocus() tea.Cmd {
 }
 
 func isText(id field) bool {
-	return id != fAuth && id != fSudoMode && id != fSavePw
+	return id != fAuth && id != fSudoMode && id != fSavePw && id != fJump
 }
 
 func (m Model) openForm(s *inventory.Server) (tea.Model, tea.Cmd) {
-	m.form = newForm(s)
+	id := ""
+	if s != nil {
+		id = s.ID
+	}
+	m.form = newForm(s, m.d.Inv.JumpOptions(id))
 	m.screen = screenForm
 	return m, textinput.Blink
 }
@@ -173,6 +196,13 @@ func (m Model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if km.String() == " " {
 			f.savePw = !f.savePw
 		}
+	case fJump:
+		switch km.String() {
+		case " ", "right":
+			f.jump = (f.jump + 1) % len(f.jumpIDs)
+		case "left":
+			f.jump = (f.jump + len(f.jumpIDs) - 1) % len(f.jumpIDs)
+		}
 	default:
 		var cmd tea.Cmd
 		f.inputs[cur], cmd = f.inputs[cur].Update(msg)
@@ -188,6 +218,7 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 	s.Host = f.inputs[fHost].Value()
 	s.User = f.inputs[fUser].Value()
 	s.Auth = f.auth
+	s.Jump = f.jumpIDs[f.jump]
 	s.KeyPath, s.SavePassword, s.SudoPassword = "", false, ""
 	if f.auth == inventory.AuthKey {
 		s.KeyPath = strings.TrimSpace(f.inputs[fKeyPath].Value())
@@ -316,6 +347,8 @@ func (m Model) viewForm() string {
 		switch id {
 		case fAuth:
 			val = choice([]string{"key", "password"}, string(f.auth))
+		case fJump:
+			val = choice(f.jumpNames, f.jumpNames[f.jump])
 		case fSudoMode:
 			names := make([]string, len(sudoModes))
 			for i, s := range sudoModes {

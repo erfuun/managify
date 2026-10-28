@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"golang.org/x/crypto/ssh/knownhosts"
 
@@ -21,7 +22,16 @@ func Text(err error, s inventory.Server) string {
 	var auth *sshx.AuthError
 	var unreach *sshx.UnreachableError
 	var mismatch *sshx.HostKeyMismatchError
+	var jump *sshx.JumpError
 	switch {
+	case errors.As(err, &jump):
+		name := jump.Jump.Name
+		if errors.Is(jump.Err, sshx.ErrForwardingDenied) {
+			return name + " doesn't allow TCP forwarding (AllowTcpForwarding in its sshd_config)."
+		}
+		// The fix belongs on the jump server's row, not this one.
+		text := strings.Replace(Text(jump.Err, jump.Jump), "Press e", "Select "+name+" and press e", 1)
+		return "Jump host " + name + ": " + text
 	case errors.As(err, &auth):
 		switch {
 		case auth.PassphraseWrong:
@@ -32,6 +42,9 @@ func Text(err error, s inventory.Server) string {
 			return "Key rejected by server. Press e to check the key path."
 		}
 	case errors.As(err, &unreach):
+		if unreach.Via != "" {
+			return fmt.Sprintf("Can't reach %s via %s (%s)", unreach.Addr, unreach.Via, unreach.Reason)
+		}
 		return fmt.Sprintf("Can't reach %s (%s)", unreach.Addr, unreach.Reason)
 	case errors.As(err, &mismatch):
 		// Name the entry the way it appears in known_hosts.
@@ -63,6 +76,8 @@ func Short(err error) string {
 	var unreach *sshx.UnreachableError
 	var mismatch *sshx.HostKeyMismatchError
 	switch {
+	case errors.Is(err, sshx.ErrForwardingDenied):
+		return "unreachable"
 	case errors.As(err, &auth):
 		return "auth failed"
 	case errors.As(err, &unreach):

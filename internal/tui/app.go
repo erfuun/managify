@@ -122,7 +122,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePrompt(msg)
 		}
 	case statusMsg:
-		return m.applyStatus(msg), nil
+		m = m.applyStatus(msg)
+		return m, m.retryDependants(msg)
 	case probeTickMsg:
 		return m, tea.Batch(m.probeAll(), m.probeTick())
 	case serverSavedMsg:

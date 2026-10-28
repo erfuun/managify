@@ -334,3 +334,55 @@ func TestDialKnownHostOtherKeyType(t *testing.T) {
 		})
 	}
 }
+
+// noDeadlineConn refuses deadlines, like x/crypto's tunnel connections.
+type noDeadlineConn struct{ net.Conn }
+
+func (noDeadlineConn) SetDeadline(time.Time) error      { return errors.New("deadline not supported") }
+func (noDeadlineConn) SetReadDeadline(time.Time) error  { return errors.New("deadline not supported") }
+func (noDeadlineConn) SetWriteDeadline(time.Time) error { return errors.New("deadline not supported") }
+
+func TestHandshakeTimeoutWithoutDeadlines(t *testing.T) {
+	near, far := net.Pipe()
+	defer far.Close()
+	pc := &pausableConn{Conn: noDeadlineConn{near}, timeout: 100 * time.Millisecond}
+	pc.resume()
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := ssh.NewClientConn(pc, "silent:22", &ssh.ClientConfig{HostKeyCallback: ssh.InsecureIgnoreHostKey()})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("handshake with a silent peer succeeded")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handshake hung")
+	}
+}
+
+func TestPausedTimerDoesNotFire(t *testing.T) {
+	near, far := net.Pipe()
+	defer far.Close()
+	pc := &pausableConn{Conn: noDeadlineConn{near}, timeout: 100 * time.Millisecond}
+	pc.resume()
+	pc.pause()
+	time.Sleep(300 * time.Millisecond)
+	go far.Write([]byte("x"))
+	buf := make([]byte, 1)
+	if _, err := pc.Read(buf); err != nil {
+		t.Fatalf("read while paused: %v", err)
+	}
+	pc.resume()
+	done := make(chan error, 1)
+	go func() { _, err := pc.Read(buf); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("read after resume succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resumed timer never closed the conn")
+	}
+}

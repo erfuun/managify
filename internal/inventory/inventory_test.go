@@ -179,3 +179,149 @@ func TestAddrAndConnKey(t *testing.T) {
 		t.Fatal("ConnKey depends on non-connection fields")
 	}
 }
+
+// jumpInv holds web-1, plus db-1 and db-2 jumping through it.
+func jumpInv(t *testing.T) (*Inventory, Server, Server, Server) {
+	t.Helper()
+	inv, _ := Load(tmpPath(t))
+	web, err := inv.Add(web1())
+	if err != nil {
+		t.Fatal(err)
+	}
+	db1, err := inv.Add(Server{Name: "db-1", Host: "10.0.0.12", User: "postgres", Auth: AuthKey, Jump: web.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db2, err := inv.Add(Server{Name: "db-2", Host: "10.0.0.13", User: "postgres", Auth: AuthKey, Jump: web.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inv, web, db1, db2
+}
+
+func TestJumpValidation(t *testing.T) {
+	inv, web, db1, _ := jumpInv(t)
+	app, err := inv.Add(Server{Name: "app-1", Host: "10.0.0.20", User: "root", Auth: AuthKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	solo, err := inv.Add(Server{Name: "solo", Host: "10.0.0.30", User: "root", Auth: AuthKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inv.Add(Server{Name: "cache", Host: "10.0.0.40", User: "root", Auth: AuthKey, Jump: solo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	hopped := web
+	hopped.Jump = app.ID
+	self := db1
+	self.Jump = db1.ID
+	missing := db1
+	missing.Jump = "deadbeef"
+	twoHop := app
+	twoHop.Jump = db1.ID
+	oneDependant := solo
+	oneDependant.Jump = app.ID
+	cases := []struct {
+		name string
+		s    Server
+		want string
+	}{
+		{"missing", missing, "jump server not found"},
+		{"self", self, "a server can't jump through itself"},
+		{"jump has a jump", twoHop, "db-1 itself jumps through web-1; only one hop is supported"},
+		{"two dependants", hopped, "db-1 and db-2 jump through this server, so it can't use a jump itself"},
+		{"one dependant", oneDependant, "cache jumps through this server, so it can't use a jump itself"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := inv.Update(c.s)
+			if err == nil || err.Error() != c.want {
+				t.Fatalf("Update err = %v, want %q", err, c.want)
+			}
+		})
+	}
+}
+
+func TestDeleteBlockedWhileJumpedThrough(t *testing.T) {
+	inv, web, _, _ := jumpInv(t)
+	err := inv.Delete(web.ID)
+	want := "web-1 is the jump host for db-1, db-2. Change those first."
+	if err == nil || err.Error() != want {
+		t.Fatalf("Delete err = %v, want %q", err, want)
+	}
+	if len(inv.Servers) != 3 {
+		t.Fatalf("%d servers left", len(inv.Servers))
+	}
+}
+
+func TestJumpSurvivesRename(t *testing.T) {
+	inv, web, db1, _ := jumpInv(t)
+	web.Name = "edge"
+	if err := inv.Update(web); err != nil {
+		t.Fatal(err)
+	}
+	if got := inv.JumpName(db1); got != "edge" {
+		t.Fatalf("JumpName = %q", got)
+	}
+	if got := inv.JumpName(web); got != "" {
+		t.Fatalf("direct JumpName = %q", got)
+	}
+}
+
+func TestJumpRoundTrip(t *testing.T) {
+	inv, _, db1, _ := jumpInv(t)
+	if err := inv.Save(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(inv.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(b), "jump:"); n != 2 {
+		t.Fatalf("%d jump lines in\n%s", n, b)
+	}
+	back, err := Load(inv.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := back.Get(db1.ID); got.Jump != db1.Jump {
+		t.Fatalf("Jump = %q, want %q", got.Jump, db1.Jump)
+	}
+}
+
+func TestConnKeyIncludesJump(t *testing.T) {
+	s := Server{ID: "7f3a9c21", Host: "10.0.0.12", Port: 22, User: "root", Auth: AuthKey}
+	j := s
+	j.Jump = "3fa07b10"
+	if s.ConnKey() == j.ConnKey() {
+		t.Fatal("ConnKey ignores Jump")
+	}
+}
+
+func TestJumpOptions(t *testing.T) {
+	inv, web, db1, _ := jumpInv(t)
+	solo, err := inv.Add(Server{Name: "solo", Host: "10.0.0.30", User: "root", Auth: AuthKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := func(ss []Server) []string {
+		var n []string
+		for _, s := range ss {
+			n = append(n, s.Name)
+		}
+		return n
+	}
+	if got := names(inv.JumpOptions(db1.ID)); !reflect.DeepEqual(got, []string{"web-1", "solo"}) {
+		t.Fatalf("db-1 options %v", got)
+	}
+	if got := names(inv.JumpOptions(solo.ID)); !reflect.DeepEqual(got, []string{"web-1"}) {
+		t.Fatalf("solo options %v", got)
+	}
+	if got := inv.JumpOptions(web.ID); len(got) != 0 {
+		t.Fatalf("web-1 options %v", names(got))
+	}
+	if got := names(inv.JumpOptions("")); !reflect.DeepEqual(got, []string{"web-1", "solo"}) {
+		t.Fatalf("new server options %v", got)
+	}
+}

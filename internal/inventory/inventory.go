@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -46,6 +47,8 @@ type Server struct {
 	SavePassword  bool     `yaml:"save_password,omitempty"`
 	SudoPassword  SudoMode `yaml:"sudo_password,omitempty"`
 	LastRemoteDir string   `yaml:"last_remote_dir,omitempty"`
+	// Jump is the ID of the server this one is reached through, like ssh -J.
+	Jump string `yaml:"jump,omitempty"`
 }
 
 func (s Server) Addr() string {
@@ -55,12 +58,16 @@ func (s Server) Addr() string {
 // ConnKey identifies everything a live connection depends on. When it changes,
 // a pooled connection for this server must not be reused.
 func (s Server) ConnKey() string {
-	return strings.Join([]string{s.ID, s.Host, strconv.Itoa(s.Port), s.User, string(s.Auth), s.KeyPath}, "|")
+	return strings.Join([]string{s.ID, s.Host, strconv.Itoa(s.Port), s.User, string(s.Auth), s.KeyPath, s.Jump}, "|")
 }
 
+// Inventory is edited on the TUI goroutine while dials look up jump servers
+// from others, so writers lock it and the lookups read-lock it. The TUI reads
+// Servers directly: it runs on the same goroutine as every writer.
 type Inventory struct {
 	Servers []Server `yaml:"servers"`
 	path    string
+	mu      sync.RWMutex
 }
 
 // Load reads path. A missing file is an empty inventory. A file that does not
@@ -82,6 +89,8 @@ func Load(path string) (*Inventory, error) {
 
 // Add validates s, assigns an ID and the default port, and appends it.
 func (inv *Inventory) Add(s Server) (Server, error) {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	s = normalize(s)
 	s.ID = NewID()
 	if err := inv.validate(s); err != nil {
@@ -92,6 +101,8 @@ func (inv *Inventory) Add(s Server) (Server, error) {
 }
 
 func (inv *Inventory) Update(s Server) error {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	i := inv.index(s.ID)
 	if i < 0 {
 		return fmt.Errorf("no server with id %s", s.ID)
@@ -105,19 +116,55 @@ func (inv *Inventory) Update(s Server) error {
 }
 
 func (inv *Inventory) Delete(id string) error {
+	inv.mu.Lock()
+	defer inv.mu.Unlock()
 	i := inv.index(id)
 	if i < 0 {
 		return fmt.Errorf("no server with id %s", id)
+	}
+	if deps := inv.dependants(id); len(deps) > 0 {
+		return fmt.Errorf("%s is the jump host for %s. Change those first.", inv.Servers[i].Name, strings.Join(deps, ", "))
 	}
 	inv.Servers = append(inv.Servers[:i], inv.Servers[i+1:]...)
 	return nil
 }
 
 func (inv *Inventory) Get(id string) (Server, bool) {
+	inv.mu.RLock()
+	defer inv.mu.RUnlock()
 	if i := inv.index(id); i >= 0 {
 		return inv.Servers[i], true
 	}
 	return Server{}, false
+}
+
+// JumpName is the name of the server s jumps through, or "" for a direct
+// server or a jump that no longer exists.
+func (inv *Inventory) JumpName(s Server) string {
+	inv.mu.RLock()
+	defer inv.mu.RUnlock()
+	if i := inv.index(s.Jump); s.Jump != "" && i >= 0 {
+		return inv.Servers[i].Name
+	}
+	return ""
+}
+
+// JumpOptions lists the servers id may jump through, in list order: not
+// itself and with no jump of their own. A server others jump through gets
+// none. id is "" for a server not added yet.
+func (inv *Inventory) JumpOptions(id string) []Server {
+	inv.mu.RLock()
+	defer inv.mu.RUnlock()
+	if id != "" && len(inv.dependants(id)) > 0 {
+		return nil
+	}
+	var opts []Server
+	for _, s := range inv.Servers {
+		if s.ID != id && s.Jump == "" {
+			opts = append(opts, s)
+		}
+	}
+	return opts
 }
 
 func (inv *Inventory) Save() error {
@@ -150,10 +197,22 @@ func (inv *Inventory) index(id string) int {
 	return -1
 }
 
+// dependants names the servers that jump through id, in list order.
+func (inv *Inventory) dependants(id string) []string {
+	var names []string
+	for _, s := range inv.Servers {
+		if s.Jump == id && s.ID != id {
+			names = append(names, s.Name)
+		}
+	}
+	return names
+}
+
 func normalize(s Server) Server {
 	s.Name = strings.TrimSpace(s.Name)
 	s.Host = strings.TrimSpace(s.Host)
 	s.User = strings.TrimSpace(s.User)
+	s.Jump = strings.TrimSpace(s.Jump)
 	if s.Port == 0 {
 		s.Port = 22
 	}
@@ -179,5 +238,35 @@ func (inv *Inventory) validate(s Server) error {
 			return fmt.Errorf("name already used: %s", s.Name)
 		}
 	}
-	return nil
+	return inv.validateJump(s)
+}
+
+// validateJump keeps every route to one hop at most.
+func (inv *Inventory) validateJump(s Server) error {
+	if s.Jump == "" {
+		return nil
+	}
+	if s.Jump == s.ID {
+		return errors.New("a server can't jump through itself")
+	}
+	i := inv.index(s.Jump)
+	if i < 0 {
+		return errors.New("jump server not found")
+	}
+	if j := inv.Servers[i]; j.Jump != "" {
+		name := j.Jump
+		if k := inv.index(j.Jump); k >= 0 {
+			name = inv.Servers[k].Name
+		}
+		return fmt.Errorf("%s itself jumps through %s; only one hop is supported", j.Name, name)
+	}
+	switch deps := inv.dependants(s.ID); len(deps) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("%s jumps through this server, so it can't use a jump itself", deps[0])
+	default:
+		return fmt.Errorf("%s and %s jump through this server, so it can't use a jump itself",
+			strings.Join(deps[:len(deps)-1], ", "), deps[len(deps)-1])
+	}
 }

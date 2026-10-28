@@ -332,3 +332,30 @@ func TestDownloadToSafeDir(t *testing.T) {
 		t.Fatalf("file = %q", b)
 	}
 }
+
+func TestExecuteLogsVia(t *testing.T) {
+	env := testkit.NewEnv(t)
+	echo := func(_ context.Context, _ string, _ io.Reader, stdout, _ io.Writer) int {
+		fmt.Fprintln(stdout, "ok")
+		return 0
+	}
+	jump := env.PasswordServer(t, testkit.Start(t, sshtest.Options{Forward: true}), "web-1")
+	s := env.PasswordServer(t, testkit.Start(t, sshtest.Options{Exec: echo}), "db-1")
+	s.Jump = jump.ID
+	env.Inv.Servers = append(env.Inv.Servers, jump, s)
+	d := deps(t, env)
+	d.JumpName = env.Inv.JumpName
+	var ev events
+	Execute(context.Background(), d, Spec{Command: "true"}, s, ev.emit)
+	last := done(t, ev.got)
+	if last.Result.Err != nil {
+		t.Fatal(last.Result.Err)
+	}
+	b, err := os.ReadFile(last.LogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first, _, _ := strings.Cut(string(b), "\n"); !strings.HasSuffix(first, " via web-1)") {
+		t.Fatalf("header %q", first)
+	}
+}
