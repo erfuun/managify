@@ -354,3 +354,54 @@ func TestJumpAuthErrorIsJumps(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A prompt for the jump server answered once must not be asked again by
+// targets that were waiting on that same dial.
+func TestCancelledJumpPromptAskedOnce(t *testing.T) {
+	j := newJump(t, sshtest.Options{Forward: true})
+	j.env.Store.Delete(secrets.LoginAccount(j.jump.ID))
+	j.jump.SavePassword = false
+	j.env.Inv.Servers[0] = j.jump
+	ctx := context.Background()
+	jumpErr := make(chan error, 1)
+	go func() { _, err := j.env.Pool.Get(ctx, j.jump); jumpErr <- err }()
+	first := <-j.env.Prompts.C
+	targetErr := make(chan error, 1)
+	go func() { _, err := j.env.Pool.Get(ctx, j.target); targetErr <- err }()
+	time.Sleep(200 * time.Millisecond) // db-1 is now waiting on web-1's dial
+	first.Reply(sshx.PromptReply{})
+	if err := <-jumpErr; !errors.Is(err, sshx.ErrPromptCancelled) {
+		t.Fatalf("jump err = %v", err)
+	}
+	select {
+	case p := <-j.env.Prompts.C:
+		p.Reply(sshx.PromptReply{})
+		t.Fatalf("asked again: %+v", p.Req)
+	case err := <-targetErr:
+		if !errors.Is(err, sshx.ErrPromptCancelled) {
+			t.Fatalf("target err = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("target dial hung")
+	}
+}
+
+func TestEvictJumpClosesTunnelAtOnce(t *testing.T) {
+	j := newJump(t, sshtest.Options{Forward: true})
+	ctx := context.Background()
+	first, err := j.env.Pool.Get(ctx, j.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.env.Pool.Evict(j.jump.ID)
+	c, err := j.env.Pool.Get(ctx, j.target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c == first {
+		t.Fatal("dead tunnel handed out right after its jump was evicted")
+	}
+	if got := run(t, c, "echo back"); got != "back" {
+		t.Fatalf("output %q", got)
+	}
+}

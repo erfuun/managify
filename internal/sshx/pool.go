@@ -37,13 +37,24 @@ type Pool struct {
 	entries map[string]*poolEntry
 	retired map[*poolEntry]bool // replaced while slow, closed by their own keepalive or Close
 	locks   map[string]chan struct{}
+	fails   map[string]poolFail
 	closed  bool
+}
+
+// poolFail is a server's last failed dial. Callers that were already waiting
+// for that dial get its error instead of dialing again, so one cancelled
+// prompt is not asked once more by every server jumping through it.
+type poolFail struct {
+	seq int
+	key string
+	err error
 }
 
 type poolEntry struct {
 	c      Client
-	key    string    // inventory.Server.ConnKey at dial time
-	lastOK time.Time // dial or last answered keepalive; guarded by Pool.mu
+	key    string     // inventory.Server.ConnKey at dial time
+	lastOK time.Time  // dial or last answered keepalive; guarded by Pool.mu
+	via    *poolEntry // the jump server's entry when dialed; nil if direct
 	stop   chan struct{}
 	once   sync.Once
 }
@@ -56,13 +67,16 @@ func (e *poolEntry) close() {
 }
 
 func NewPool(d serverDialer) *Pool {
-	return &Pool{d: d, entries: map[string]*poolEntry{}, retired: map[*poolEntry]bool{}, locks: map[string]chan struct{}{}}
+	return &Pool{d: d, entries: map[string]*poolEntry{}, retired: map[*poolEntry]bool{}, locks: map[string]chan struct{}{}, fails: map[string]poolFail{}}
 }
 
 // Get returns the server's live connection, dialing at most once even when
 // many callers ask at the same moment.
 func (p *Pool) Get(ctx context.Context, s inventory.Server) (Client, error) {
 	lock := p.lockFor(s.ID)
+	p.mu.Lock()
+	seq := p.fails[s.ID].seq
+	p.mu.Unlock()
 	select {
 	case lock <- struct{}{}:
 	case <-ctx.Done():
@@ -75,6 +89,10 @@ func (p *Pool) Get(ctx context.Context, s inventory.Server) (Client, error) {
 		p.mu.Unlock()
 		return nil, errPoolClosed
 	}
+	if f := p.fails[s.ID]; f.seq > seq && f.key == s.ConnKey() {
+		p.mu.Unlock()
+		return nil, f.err
+	}
 	if e := p.entries[s.ID]; e != nil {
 		if e.key == s.ConnKey() {
 			idle := time.Since(e.lastOK) >= orDefault(p.CheckAfter, defaultCheckAfter)
@@ -84,8 +102,9 @@ func (p *Pool) Get(ctx context.Context, s inventory.Server) (Client, error) {
 			}
 		} else {
 			delete(p.entries, s.ID)
+			deps := p.takeDependants(e)
 			p.mu.Unlock()
-			defer e.close()
+			defer closeAll(append(deps, e))
 		}
 	} else {
 		p.mu.Unlock()
@@ -93,10 +112,18 @@ func (p *Pool) Get(ctx context.Context, s inventory.Server) (Client, error) {
 
 	c, err := p.d.Dial(ctx, s)
 	if err != nil {
+		if ctx.Err() == nil { // a caller giving up is not an answer for the others
+			p.mu.Lock()
+			p.fails[s.ID] = poolFail{seq: p.fails[s.ID].seq + 1, key: s.ConnKey(), err: err}
+			p.mu.Unlock()
+		}
 		return nil, err
 	}
 	e := &poolEntry{c: c, key: s.ConnKey(), lastOK: time.Now(), stop: make(chan struct{})}
 	p.mu.Lock()
+	if s.Jump != "" {
+		e.via = p.entries[s.Jump]
+	}
 	if p.closed {
 		p.mu.Unlock()
 		c.Close()
@@ -119,8 +146,29 @@ func (p *Pool) Evict(serverID string) {
 	p.mu.Lock()
 	e := p.entries[serverID]
 	delete(p.entries, serverID)
-	p.mu.Unlock()
+	var deps []*poolEntry
 	if e != nil {
+		deps = append(p.takeDependants(e), e)
+	}
+	p.mu.Unlock()
+	closeAll(deps)
+}
+
+// takeDependants removes the entries tunnelled through e, whose connections
+// die with it. Called with p.mu held.
+func (p *Pool) takeDependants(e *poolEntry) []*poolEntry {
+	var deps []*poolEntry
+	for id, d := range p.entries {
+		if d.via == e {
+			delete(p.entries, id)
+			deps = append(deps, d)
+		}
+	}
+	return deps
+}
+
+func closeAll(es []*poolEntry) {
+	for _, e := range es {
 		e.close()
 	}
 }
@@ -186,8 +234,9 @@ func (p *Pool) drop(id string, e *poolEntry) {
 		delete(p.entries, id)
 	}
 	delete(p.retired, e)
+	deps := p.takeDependants(e)
 	p.mu.Unlock()
-	e.close()
+	closeAll(append(deps, e))
 }
 
 // keepalive gives each probe one interval to answer. A half-open connection
