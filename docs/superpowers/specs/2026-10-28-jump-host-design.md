@@ -137,7 +137,7 @@ Direct dials keep using the deadline. The timer is used whenever
 | Jump server unreachable / auth / host key | `*JumpError{Jump: web-1, Err: <its error>}` | `Jump host web-1: <its text>`, with the hint naming web-1 ("Select web-1 and press e…") |
 | Jump refuses forwarding (`ssh.Prohibited`) | `*JumpError{…, Err: ErrForwardingDenied}` | `web-1 doesn't allow TCP forwarding (AllowTcpForwarding in its sshd_config).` |
 | Target refused / timed out / unknown behind jump | `*UnreachableError{Addr: 10.0.0.12:22, Via: "web-1", Reason}` | `Can't reach 10.0.0.12:22 via web-1 (connection refused)` |
-| Jump ID missing, self, or two hops (bad yaml) | `*JumpError{…}` with the validation message | that message |
+| Jump ID missing, self, or two hops (bad yaml) | `*JumpError{…}` with the validation message | `Jump host <jump name or ID>: <that message>` |
 | User cancels a prompt for the jump | `ErrPromptCancelled`, unwrapped | `Cancelled.` |
 
 `friendly.Short` keeps its words (`auth failed`, `refused`, `timeout`) by
