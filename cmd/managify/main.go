@@ -54,7 +54,9 @@ func run() error {
 	store, session := secrets.NewKeyring(), secrets.NewSession()
 	prompts := sshx.NewQueue()
 	creds := &sshx.Creds{Store: store, Session: session, Prompter: prompts}
-	pool := sshx.NewPool(&sshx.Dialer{KnownHosts: knownHosts, Creds: creds})
+	dialer := &sshx.Dialer{KnownHosts: knownHosts, Creds: creds, Lookup: inv.Get}
+	pool := sshx.NewPool(dialer)
+	dialer.Jump = pool.Get
 	defer pool.Close()
 
 	deps := tui.Deps{

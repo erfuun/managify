@@ -3,6 +3,7 @@ package sshx
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,7 +23,10 @@ type fakeClient struct {
 
 func (c *fakeClient) NewSession() (*ssh.Session, error) { return nil, errors.New("fake") }
 func (c *fakeClient) NewSFTP() (*sftp.Client, error)    { return nil, errors.New("fake") }
-func (c *fakeClient) Close() error                      { c.closes.Add(1); return nil }
+func (c *fakeClient) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("fake")
+}
+func (c *fakeClient) Close() error { c.closes.Add(1); return nil }
 func (c *fakeClient) SendKeepalive() error {
 	c.keepalives.Add(1)
 	if c.keepalive != nil {
