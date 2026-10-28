@@ -29,7 +29,7 @@ Copied from the execution ledger (`.superpowers/sdd/2026-10-28-jump-host/progres
 
 ## Deferred minors
 
-- `TestDialSharedKeySlowPromptBothSucceed` flakes with its 200 ms handshake timeout under load. This was already true before the branch.
+- ~~`TestDialSharedKeySlowPromptBothSucceed` flakes with its 200 ms handshake timeout under load.~~ Fixed later. The cause was the key's bcrypt KDF (about 95 ms per decrypt) running after the timeout resumed. The decrypt now stays paused (`TestDialKeyDecryptNotTimedOut`).
 - The `pausableConn` timer callback does not recheck `paused`/`off` under the lock, and the timer is not stopped on the handshake error path. The race window is tiny.
 - `job` evicts the target, which is a no-op, when the AuthError belongs to the jump. It could skip the eviction when the error is a `JumpError`.
 - A half-open jump link can hold a target handshake for up to about 60 s, until the jump's keepalive drops it.

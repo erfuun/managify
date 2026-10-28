@@ -142,9 +142,11 @@ func (d *Dialer) keyFileSigner(ctx context.Context, s inventory.Server, pc *paus
 }
 
 func (d *Dialer) decryptKey(ctx context.Context, s inventory.Server, pc *pausableConn, path string, pemBytes []byte) (ssh.Signer, error) {
+	// Paused through the decrypt too: the KDF is local CPU work that a slow
+	// machine or a key with many rounds can stretch, not the server being slow.
 	pc.pause()
+	defer pc.resume()
 	phrase, err := d.Creds.Passphrase(ctx, s, path)
-	pc.resume()
 	if err != nil {
 		return nil, err
 	}
