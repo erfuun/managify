@@ -26,7 +26,8 @@ servers, or upload-and-run a script without typing a host, user or password.
 ## Non-goals (v1)
 
 - Windows/BSD *target* servers (targets are Linux; status probe reads `/proc`).
-- Importing `~/.ssh/config`, jump hosts/bastions, port forwarding.
+- Importing `~/.ssh/config`, jump chains longer than one hop (one hop: see
+  `2026-10-28-jump-host-design.md`), port forwarding.
 - Team sharing, multi-user inventory, audit logs.
 - A non-interactive CLI mode.
 - Commands that need interactive input other than a sudo password (see
